@@ -12,6 +12,7 @@ add_executable(Sentinel
     main.cpp
     src/Application.cpp
     src/CommandProcessor.cpp
+    src/FuzzySearch.cpp
     src/Task.cpp
     src/TaskManager.cpp
 )
