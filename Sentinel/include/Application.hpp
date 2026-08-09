@@ -50,6 +50,7 @@ private:
     void ResetHistoryNavigation();
     void PeriodicAutosave();
     void ApplyColors();
+    void OpenNativeJsonFilePicker();
 
     bool OpenCommandDialog(const std::string& command);
     void CloseCommandDialog();
