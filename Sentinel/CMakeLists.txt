@@ -14,7 +14,10 @@ target_include_directories(Sentinel PRIVATE
     ${CURSES_INCLUDE_DIRS}
 )
 
-target_link_libraries(Sentinel PRIVATE ${CURSES_LIBRARIES})
+target_link_libraries(Sentinel PRIVATE
+    ${CURSES_LIBRARIES}
+    SentinelShared
+)
 
 target_compile_options(Sentinel PRIVATE
     -Wall
