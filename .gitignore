@@ -2,5 +2,7 @@ build/
 cmake-build-*/
 compile_commands.json
 current_data.json
+*.json.lock
+*.json.tmp.*
 *.o
 *.out
