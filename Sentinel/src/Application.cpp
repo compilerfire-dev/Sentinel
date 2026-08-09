@@ -37,7 +37,7 @@ struct DialogRect {
     int width{};
 };
 
-constexpr std::array<CommandDefinition, 13> Commands{{
+constexpr std::array<CommandDefinition, 14> Commands{{
     {"add", "add a new task with an ID"},
     {"remove", "remove a task"},
     {"start", "start or resume a task"},
@@ -46,6 +46,7 @@ constexpr std::array<CommandDefinition, 13> Commands{{
     {"search", "fuzzy-search tasks"},
     {"list", "show all tasks"},
     {"commands", "show all commands"},
+    {"autoSave", "set autosave interval, e.g. 20s or 10m 30s"},
     {"setJsonFile", "choose/switch active JSON data file"},
     {"defineColor", "define a named RGB color"},
     {"color", "set default or per-task color"},
@@ -562,7 +563,12 @@ bool Application::OpenCommandDialog(const std::string& command) {
         return field;
     };
 
-    if (command == "add") {
+    if (command == "autoSave") {
+        dialog.fields.push_back(text(
+            "Duration",
+            std::to_string(taskManager_.GetAutoSaveInterval().count()) + "s"
+        ));
+    } else if (command == "add") {
         dialog.fields.push_back(text("ID"));
         dialog.fields.push_back(text("Name"));
     } else if (
@@ -804,7 +810,8 @@ void Application::RenderHeader() {
 
     const std::string title = commandDialog_
         ? "Sentinel - Productivity Tracker | COMMAND ARGUMENT WINDOW"
-        : "Sentinel - Productivity Tracker | " + taskManager_.GetJsonFile();
+        : "Sentinel - Productivity Tracker | " + taskManager_.GetJsonFile() +
+          " | autoSave " + std::to_string(taskManager_.GetAutoSaveInterval().count()) + "s";
     mvaddnstr(0, 0, title.c_str(), std::max(0, width - 1));
     if (width > 1) mvhline(1, 0, ACS_HLINE, width - 1);
 }
