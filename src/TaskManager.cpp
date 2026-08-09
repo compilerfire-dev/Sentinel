@@ -143,7 +143,11 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
     }
 
     std::string saveError;
-    Save(saveError);
+    if (!Save(saveError)) {
+        errorMessage = "Current data could not be saved before switching: " + saveError;
+        return false;
+    }
+
     jsonFilePath_ = path;
     tasks_.clear();
     return Load(errorMessage);
