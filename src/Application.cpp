@@ -173,6 +173,7 @@ void Application::RecallPreviousCommand() {
         --(*historyIndex_);
     }
     commandBuffer_ = commandHistory_[*historyIndex_];
+    cursorPosition_ = commandBuffer_.size();
     ResetSuggestionSelection();
 }
 
@@ -185,6 +186,7 @@ void Application::RecallNextCommand() {
         commandBuffer_ = commandBeforeHistory_;
         ResetHistoryNavigation();
     }
+    cursorPosition_ = commandBuffer_.size();
     ResetSuggestionSelection();
 }
 
@@ -200,6 +202,20 @@ void Application::HandleInput() {
 
     if (key == KEY_MOUSE) { HandleMouse(); return; }
     if (key == '\t') { AcceptSuggestion(suggestions); ResetHistoryNavigation(); return; }
+
+    if (key == KEY_LEFT) {
+        if (cursorPosition_ > 0) --cursorPosition_;
+        ResetHistoryNavigation();
+        ResetSuggestionSelection();
+        return;
+    }
+
+    if (key == KEY_RIGHT) {
+        if (cursorPosition_ < commandBuffer_.size()) ++cursorPosition_;
+        ResetHistoryNavigation();
+        ResetSuggestionSelection();
+        return;
+    }
 
     if (key == KEY_UP) {
         if (navigatingSuggestions_ && !suggestions.empty()) {
@@ -228,20 +244,25 @@ void Application::HandleInput() {
         commandProcessor_.Execute(executedCommand);
         AddCommandToHistory(executedCommand);
         commandBuffer_.clear();
+        cursorPosition_ = 0;
         persistenceStatus_.clear();
         ResetSuggestionSelection();
         return;
     }
 
     if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        if (!commandBuffer_.empty()) commandBuffer_.pop_back();
+        if (cursorPosition_ > 0 && !commandBuffer_.empty()) {
+            commandBuffer_.erase(cursorPosition_ - 1, 1);
+            --cursorPosition_;
+        }
         ResetHistoryNavigation();
         ResetSuggestionSelection();
         return;
     }
 
     if (key >= 32 && key <= 126) {
-        commandBuffer_.push_back(static_cast<char>(key));
+        commandBuffer_.insert(commandBuffer_.begin() + static_cast<std::ptrdiff_t>(cursorPosition_), static_cast<char>(key));
+        ++cursorPosition_;
         ResetHistoryNavigation();
         ResetSuggestionSelection();
     }
@@ -251,6 +272,23 @@ void Application::HandleMouse() {
     MEVENT event{};
     if (getmouse(&event) != OK) return;
     if ((event.bstate & BUTTON1_CLICKED) == 0 && (event.bstate & BUTTON1_PRESSED) == 0) return;
+
+    int height = 0;
+    int width = 0;
+    getmaxyx(stdscr, height, width);
+    (void)width;
+
+    if (event.y == height - 1) {
+        const int commandColumn = std::max(0, event.x - 2);
+        cursorPosition_ = std::min(
+            commandBuffer_.size(),
+            static_cast<std::size_t>(commandColumn)
+        );
+        ResetHistoryNavigation();
+        ResetSuggestionSelection();
+        return;
+    }
+
     const auto suggestions = BuildSuggestions();
     if (suggestions.empty()) return;
     const int startRow = SuggestionStartRow(suggestions.size());
@@ -265,6 +303,7 @@ void Application::AcceptSuggestion(const std::vector<Suggestion>& suggestions) {
     if (suggestions.empty()) return;
     selectedSuggestion_ = std::min(selectedSuggestion_, suggestions.size() - 1);
     commandBuffer_ = suggestions[selectedSuggestion_].replacement;
+    cursorPosition_ = commandBuffer_.size();
     ResetSuggestionSelection();
 }
 
@@ -465,10 +504,10 @@ void Application::RenderStatus() {
     }
     if (!BuildSuggestions().empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Tab complete | Down suggestions | Up history | click select";
+        status += "Tab complete | Left/Right edit | Down suggestions | Up history | click select";
     } else if (!commandHistory_.empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Up: previous command";
+        status += "Left/Right edit | Up: previous command";
     }
     mvaddnstr(height - 2, 0, status.c_str(), std::max(0, width - 1));
 }
@@ -482,7 +521,7 @@ void Application::RenderCommandLine() {
     const int row = height - 1;
     mvaddnstr(row, 0, "> ", std::max(0, width - 1));
     if (width > 2) mvaddnstr(row, 2, commandBuffer_.c_str(), width - 3);
-    move(row, std::min(width - 1, static_cast<int>(commandBuffer_.size()) + 2));
+    move(row, std::min(width - 1, static_cast<int>(cursorPosition_) + 2));
 }
 
 std::string Application::FormatDuration(std::chrono::seconds duration) {
