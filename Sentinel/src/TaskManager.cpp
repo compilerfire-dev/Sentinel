@@ -245,6 +245,10 @@ bool TaskManager::Save(std::string& errorMessage) const {
 bool TaskManager::SaveNow(std::string& errorMessage) const {
     const std::filesystem::path path(jsonFilePath_);
 
+    json localTasks = json::array();
+    for (const Task& task : tasks_) localTasks.push_back(TaskToJson(task));
+
+    SentinelShared::SharedTaskBaseline nextBaseline;
     const bool saved = SentinelShared::JsonDataStore::Update(
         path,
         [&](json& root, std::string& mutationError) {
@@ -253,9 +257,13 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
             }
             auto& shared = root["sharedTasks"];
             shared["version"] = SentinelShared::SharedTaskWorldVersion;
-            shared["tasks"] = json::array();
-            for (const Task& task : tasks_) {
-                shared["tasks"].push_back(TaskToJson(task));
+            if (!SentinelShared::MergeCanonicalTasks(
+                    shared,
+                    localTasks,
+                    sharedTaskBaseline_,
+                    nextBaseline,
+                    mutationError)) {
+                return false;
             }
 
             auto& settings = SentinelSettingsForWrite(root);
@@ -273,7 +281,10 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
         errorMessage
     );
 
-    if (saved) lastPeriodicSave_ = std::chrono::steady_clock::now();
+    if (saved) {
+        sharedTaskBaseline_ = std::move(nextBaseline);
+        lastPeriodicSave_ = std::chrono::steady_clock::now();
+    }
     return saved;
 }
 
@@ -330,6 +341,16 @@ bool TaskManager::Load(std::string& errorMessage) {
             loaded.push_back(std::move(task));
         }
 
+        SentinelShared::SharedTaskBaseline loadedBaseline;
+        std::string baselineError;
+        if (!SentinelShared::BuildSharedTaskBaseline(
+                sharedTasks,
+                loadedBaseline,
+                baselineError)) {
+            errorMessage = baselineError;
+            return false;
+        }
+
         std::unordered_map<std::string, RgbColor> loadedColors;
         std::chrono::seconds loadedAutoSaveInterval{1};
         if (root.contains("sentinel") && root["sentinel"].is_object()) {
@@ -346,6 +367,7 @@ bool TaskManager::Load(std::string& errorMessage) {
         }
 
         tasks_ = std::move(loaded);
+        sharedTaskBaseline_ = std::move(loadedBaseline);
         definedColors_ = std::move(loadedColors);
         autoSaveInterval_ = loadedAutoSaveInterval;
         lastPeriodicSave_ = std::chrono::steady_clock::now();
@@ -372,6 +394,7 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
 
     const std::string previousPath = jsonFilePath_;
     const std::vector<Task> previousTasks = tasks_;
+    const auto previousBaseline = sharedTaskBaseline_;
     const auto previousColors = definedColors_;
     const auto previousAutoSaveInterval = autoSaveInterval_;
 
@@ -380,6 +403,7 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
 
     jsonFilePath_ = previousPath;
     tasks_ = previousTasks;
+    sharedTaskBaseline_ = previousBaseline;
     definedColors_ = previousColors;
     autoSaveInterval_ = previousAutoSaveInterval;
     lastPeriodicSave_ = std::chrono::steady_clock::now();
