@@ -40,12 +40,14 @@ struct DialogRect {
     int width{};
 };
 
-constexpr std::array<CommandDefinition, 14> Commands{{
+constexpr std::array<CommandDefinition, 16> Commands{{
     {"add", "add a new task with an ID"},
     {"remove", "remove a task"},
+    {"erase", "erase/remove a task"},
     {"start", "start or resume a task"},
     {"stop", "stop a running task"},
     {"done", "complete a task"},
+    {"unset", "untick a completed task"},
     {"search", "fuzzy-search tasks"},
     {"list", "show all tasks"},
     {"commands", "show all commands"},
@@ -58,8 +60,10 @@ constexpr std::array<CommandDefinition, 14> Commands{{
 }};
 
 bool TakesTaskArgument(std::string_view command) {
-    return command == "remove" || command == "start" || command == "stop" ||
-           command == "done" || command == "search";
+    return command == "remove" || command == "erase" ||
+           command == "start" || command == "stop" ||
+           command == "done" || command == "unset" ||
+           command == "search";
 }
 
 bool IsWheelUp(mmask_t state) {
@@ -619,8 +623,8 @@ bool Application::OpenCommandDialog(const std::string& command) {
         dialog.fields.push_back(text("ID"));
         dialog.fields.push_back(text("Name"));
     } else if (
-        command == "remove" || command == "start" ||
-        command == "stop" || command == "done"
+        command == "remove" || command == "erase" || command == "start" ||
+        command == "stop" || command == "done" || command == "unset"
     ) {
         dialog.fields.push_back(drop("Task", TaskIdOptions()));
     } else if (command == "search") {
