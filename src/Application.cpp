@@ -23,7 +23,7 @@ struct CommandDefinition {
     std::string_view description;
 };
 
-constexpr std::array<CommandDefinition, 12> Commands{{
+constexpr std::array<CommandDefinition, 13> Commands{{
     {"add", "add a new task with an ID"},
     {"remove", "remove a task"},
     {"start", "start or resume a task"},
@@ -33,7 +33,8 @@ constexpr std::array<CommandDefinition, 12> Commands{{
     {"list", "show all tasks"},
     {"commands", "show all commands"},
     {"setJsonFile", "switch active JSON data file"},
-    {"color", "set default or per-task RGB"},
+    {"defineColor", "define a named RGB color"},
+    {"color", "set default or per-task color"},
     {"help", "show command help"},
     {"quit", "save and exit Sentinel"},
 }};
@@ -276,14 +277,11 @@ void Application::HandleMouse() {
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
-    (void)width;
+    const int commandRow = height - 1;
 
-    if (event.y == height - 1) {
-        const int commandColumn = std::max(0, event.x - 2);
-        cursorPosition_ = std::min(
-            commandBuffer_.size(),
-            static_cast<std::size_t>(commandColumn)
-        );
+    if (event.y == commandRow) {
+        const int textColumn = std::max(0, event.x - 2);
+        cursorPosition_ = std::min(commandBuffer_.size(), static_cast<std::size_t>(textColumn));
         ResetHistoryNavigation();
         ResetSuggestionSelection();
         return;
@@ -504,10 +502,10 @@ void Application::RenderStatus() {
     }
     if (!BuildSuggestions().empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Tab complete | Left/Right edit | Down suggestions | Up history | click select";
+        status += "Tab complete | Down suggestions | Up history | Left/Right cursor | click select";
     } else if (!commandHistory_.empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Left/Right edit | Up: previous command";
+        status += "Up: previous command | Left/Right: cursor";
     }
     mvaddnstr(height - 2, 0, status.c_str(), std::max(0, width - 1));
 }
