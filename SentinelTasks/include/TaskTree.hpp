@@ -13,7 +13,6 @@ enum class NodeKind {
 struct TaskNode {
     std::string id;
     std::string name;
-    std::string emoji;
     std::string description;
     std::string parentId;
     NodeKind kind{NodeKind::Task};
@@ -32,14 +31,12 @@ public:
         NodeKind kind,
         std::string id,
         std::string parentId,
-        std::string emoji,
         std::string name,
         std::string& errorMessage
     );
 
     bool RemoveNode(const std::string& id, std::string& errorMessage);
     bool SetDescription(const std::string& id, std::string description, std::string& errorMessage);
-    bool SetEmoji(const std::string& id, std::string emoji, std::string& errorMessage);
 
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
@@ -47,11 +44,7 @@ public:
     std::vector<VisibleTreeNode> Flatten() const;
     std::optional<std::string> ParentOf(const std::string& id) const;
     std::optional<std::string> FirstChildOf(const std::string& id) const;
-
     bool Empty() const noexcept;
-
-    static bool IsAllowedEmoji(const std::string& emoji);
-    static const std::vector<std::string>& AllowedEmojis();
 
 private:
     void FlattenChildren(
@@ -60,7 +53,6 @@ private:
         std::size_t depth,
         std::vector<VisibleTreeNode>& output
     ) const;
-
     void CollectSubtreeIds(const std::string& id, std::vector<std::string>& output) const;
 
     std::unordered_map<std::string, TaskNode> nodes_;
