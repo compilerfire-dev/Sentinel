@@ -14,12 +14,15 @@ struct TaskSearchResult {
 
 class TaskManager {
 public:
-    Task& AddTask(std::string name);
+    Task* AddTask(std::string id, std::string name);
     bool RemoveTask(std::size_t index);
     void Clear();
 
     Task* GetTask(std::size_t index);
     const Task* GetTask(std::size_t index) const;
+    Task* GetTaskById(const std::string& id);
+    const Task* GetTaskById(const std::string& id) const;
+    std::optional<std::size_t> FindIndexById(const std::string& id) const;
 
     std::vector<TaskSearchResult> FuzzySearchTasks(const std::string& query) const;
     std::vector<std::size_t> Search(const std::string& query) const;
