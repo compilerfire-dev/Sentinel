@@ -84,6 +84,30 @@ bool TaskTree::SetDescription(const std::string& id, std::string description, st
     return true;
 }
 
+bool TaskTree::SetColor(
+    const std::string& id,
+    RgbColor foreground,
+    RgbColor background,
+    std::string& errorMessage
+) {
+    TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+    node->foregroundColor = foreground;
+    node->backgroundColor = background;
+    errorMessage.clear();
+    return true;
+}
+
+void TaskTree::ClearColor(const std::string& id) {
+    TaskNode* node = GetNode(id);
+    if (!node) return;
+    node->foregroundColor.reset();
+    node->backgroundColor.reset();
+}
+
 TaskNode* TaskTree::GetNode(const std::string& id) {
     const auto it = nodes_.find(id);
     return it == nodes_.end() ? nullptr : &it->second;
