@@ -225,25 +225,52 @@ bool StatisticsData::Load(const std::filesystem::path& path, std::string& errorM
     std::vector<std::int64_t> creationTimes;
     std::vector<std::int64_t> completionTimes;
 
-    if (root.contains("sentinel") && root["sentinel"].is_object() && root["sentinel"].contains("tasks")) {
-        AccumulateTaskArray(
-            root["sentinel"]["tasks"],
-            "Sentinel",
-            next,
-            creationTimes,
-            completionTimes
-        );
-    } else if (root.contains("tasks")) {
-        AccumulateTaskArray(root["tasks"], "Sentinel", next, creationTimes, completionTimes);
-    }
+    const bool hasCanonicalSharedTasks =
+        root.contains("sharedTasks") &&
+        root["sharedTasks"].is_object() &&
+        root["sharedTasks"].contains("tasks") &&
+        root["sharedTasks"]["tasks"].is_array();
 
-    if (root.contains("sentinelTasks") && root["sentinelTasks"].is_object() && root["sentinelTasks"].contains("nodes")) {
-        AccumulateTreeNodes(
-            root["sentinelTasks"]["nodes"],
+    if (hasCanonicalSharedTasks) {
+        // New shared identity model: each logical task exists exactly once.
+        AccumulateTaskArray(
+            root["sharedTasks"]["tasks"],
+            "Shared",
             next,
             creationTimes,
             completionTimes
         );
+    } else {
+        // Read-only compatibility for old JSON files that have not yet been
+        // opened by Sentinel/SentinelTasks and therefore have not been purged.
+        if (root.contains("sentinel") && root["sentinel"].is_object() &&
+            root["sentinel"].contains("tasks")) {
+            AccumulateTaskArray(
+                root["sentinel"]["tasks"],
+                "Sentinel",
+                next,
+                creationTimes,
+                completionTimes
+            );
+        } else if (root.contains("tasks")) {
+            AccumulateTaskArray(
+                root["tasks"],
+                "Sentinel",
+                next,
+                creationTimes,
+                completionTimes
+            );
+        }
+
+        if (root.contains("sentinelTasks") && root["sentinelTasks"].is_object() &&
+            root["sentinelTasks"].contains("nodes")) {
+            AccumulateTreeNodes(
+                root["sentinelTasks"]["nodes"],
+                next,
+                creationTimes,
+                completionTimes
+            );
+        }
     }
 
     next.createdTaskHistory = BuildCumulativeHistory(std::move(creationTimes));
