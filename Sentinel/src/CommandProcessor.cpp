@@ -13,6 +13,8 @@ const std::vector<std::string> CommandLines{
     "add \"id\" \"name\"                        Quoted ID/name form",
     "remove <id | fuzzy name>                     Remove a task",
     "erase <id | fuzzy name>                      Erase/remove a task",
+    "clear                                        Remove all tasks",
+    "clear <id | fuzzy name>                      Remove one task",
     "start <id | fuzzy name>                      Start or resume a task",
     "stop <id | fuzzy name>                       Stop a running task",
     "done <id | fuzzy name>                       Complete a task",
@@ -202,6 +204,19 @@ void CommandProcessor::Execute(const std::string& line) {
         if (query.empty()) { status_ = "Usage: search <fuzzy text>"; return; }
         searchResults_ = manager_.Search(query);
         status_ = "Fuzzy search results: " + std::to_string(searchResults_->size());
+        return;
+    }
+    if (command == "clear") {
+        if (argument.empty()) {
+            manager_.Clear();
+            status_ = "All tasks cleared.";
+            Autosave();
+            return;
+        }
+        const auto index = ResolveTaskReference(argument);
+        if (!index) return;
+        status_ = manager_.RemoveTask(*index) ? "Task cleared." : "Task does not exist.";
+        Autosave();
         return;
     }
     if (command != "remove" && command != "erase" && command != "start" &&
