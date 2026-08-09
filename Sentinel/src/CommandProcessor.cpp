@@ -12,9 +12,11 @@ const std::vector<std::string> CommandLines{
     "add <id> <name>                              Add a task with a user-defined ID",
     "add \"id\" \"name\"                        Quoted ID/name form",
     "remove <id | fuzzy name>                     Remove a task",
+    "erase <id | fuzzy name>                      Erase/remove a task",
     "start <id | fuzzy name>                      Start or resume a task",
     "stop <id | fuzzy name>                       Stop a running task",
     "done <id | fuzzy name>                       Complete a task",
+    "unset <id | fuzzy name>                      Untick a completed task",
     "search <fuzzy text>                          Show fuzzy-matched tasks",
     "list                                         Show all tasks",
     "commands                                     Show all commands",
@@ -202,19 +204,30 @@ void CommandProcessor::Execute(const std::string& line) {
         status_ = "Fuzzy search results: " + std::to_string(searchResults_->size());
         return;
     }
-    if (command != "remove" && command != "start" && command != "stop" && command != "done") { status_ = "Unknown command: " + command; return; }
+    if (command != "remove" && command != "erase" && command != "start" &&
+        command != "stop" && command != "done" && command != "unset") {
+        status_ = "Unknown command: " + command;
+        return;
+    }
     const auto index = ResolveTaskReference(argument);
     if (!index) return;
-    if (command == "remove") { status_ = manager_.RemoveTask(*index) ? "Task removed." : "Task does not exist."; Autosave(); return; }
+    if (command == "remove" || command == "erase") {
+        status_ = manager_.RemoveTask(*index) ? "Task erased." : "Task does not exist.";
+        Autosave();
+        return;
+    }
     Task* task = manager_.GetTask(*index);
     if (!task) { status_ = "Task does not exist."; return; }
     if (command == "start") {
-        if (task->IsCompleted()) { status_ = "Completed tasks cannot be restarted."; return; }
+        if (task->IsCompleted()) { status_ = "Completed tasks cannot be restarted. Use unset first."; return; }
         task->Start(); status_ = "Task started: " + task->GetId();
     } else if (command == "stop") {
         task->Stop(); status_ = "Task stopped: " + task->GetId();
-    } else {
+    } else if (command == "done") {
         task->Complete(); status_ = "Task completed: " + task->GetId();
+    } else {
+        if (!task->IsCompleted()) { status_ = "Task is already unset: " + task->GetId(); return; }
+        task->Unset(); status_ = "Task unset: " + task->GetId();
     }
     Autosave();
 }
