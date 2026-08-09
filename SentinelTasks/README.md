@@ -30,7 +30,9 @@ setJsonFile <path.json>
 defineColor <name> rgb(r,g,b)
 color <foreground> bg <background>
 color <node-id> <foreground> bg <background>
-manualSelect [id]
+manualSelect
+manualSelect <id>
+select
 select <id>
 commands
 list
@@ -39,9 +41,58 @@ quit
 
 Names, descriptions, IDs, paths, and custom color names can be enclosed in double quotes when they contain spaces.
 
+## Selection modes
+
+SentinelTasks now intentionally provides two different selection workflows.
+
+### Manual selection
+
+Enter:
+
+```text
+manualSelect
+```
+
+and SentinelTasks immediately enters the tree selection mode. It does not open an argument popup.
+
+Controls:
+
+```text
+Up / Down    previous / next visible node
+Left         select parent
+Right        select first child
+Mouse click  select the clicked tree node
+Enter        keep selection and leave manual mode
+Esc          leave manual mode
+```
+
+You can optionally choose the initial node before entering manual mode:
+
+```text
+manualSelect opengl
+```
+
+### Popup selection
+
+Enter:
+
+```text
+select
+```
+
+to open the ncurses popup node selector. Choose a node from the drop-list and submit it.
+
+Direct selection remains available:
+
+```text
+select opengl
+```
+
+so scripts and command-line-oriented workflows do not need to use the popup.
+
 ## JSON persistence and file selection
 
-SentinelTasks now loads and autosaves `current_data.json`. Its data is stored under the `sentinelTasks` object so unrelated Sentinel/statistics sections in the same JSON file are preserved.
+SentinelTasks loads and autosaves `current_data.json`. Its data is stored under the `sentinelTasks` object so unrelated Sentinel/statistics sections in the same JSON file are preserved.
 
 The persisted tree includes node hierarchy, names, descriptions, colors, named colors, elapsed task time, running/completed state, and completion timestamps.
 
@@ -169,9 +220,9 @@ SentinelTasks also provides the built-in color family used by Sentinel.
 
 ## GUI-style argument windows
 
-Other argument-taking commands can still open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `select`, and `manualSelect` use node drop-lists. `start`, `stop`, and `done` use task-only drop-lists. `defineColor` and `color` provide their color controls.
+Argument-taking commands can open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove` and `select` use node drop-lists. `start`, `stop`, and `done` use task-only drop-lists. `defineColor` and `color` provide their color controls.
 
-`setDescription` uses the embedded right-pane editor, while bare `setJsonFile` uses the desktop file chooser.
+`manualSelect` is deliberately not a popup command: it enters arrow/mouse tree-selection mode immediately. `setDescription` uses the embedded right-pane editor, while bare `setJsonFile` uses the desktop file chooser.
 
 ## Controls
 
@@ -186,8 +237,6 @@ Mouse      position cursor / choose suggestion
 Enter      execute command
 Backspace  delete before cursor
 ```
-
-Manual selection uses Up/Down for nodes, Left for parent, Right for first child, mouse click for selection, and Enter/Esc to finish.
 
 ## Build
 
