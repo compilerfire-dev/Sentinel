@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SharedTaskMerge.hpp"
 #include "Task.hpp"
 
 #include <chrono>
@@ -50,6 +51,7 @@ private:
     std::unordered_map<std::string, RgbColor> definedColors_;
     std::string jsonFilePath_{"current_data.json"};
     std::chrono::seconds autoSaveInterval_{1};
+    mutable SentinelShared::SharedTaskBaseline sharedTaskBaseline_;
     mutable std::chrono::steady_clock::time_point lastPeriodicSave_{
         std::chrono::steady_clock::now()
     };
