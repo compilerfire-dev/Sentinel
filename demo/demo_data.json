@@ -1,0 +1,171 @@
+{
+  "version": 1,
+  "sentinel": {
+    "tasks": [
+      {
+        "id": "sentinel_architecture",
+        "name": "Define Sentinel architecture",
+        "elapsed_seconds": 5400,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1784541600
+      },
+      {
+        "id": "sentinel_task_model",
+        "name": "Implement task model",
+        "elapsed_seconds": 8100,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1784728800
+      },
+      {
+        "id": "sentinel_fuzzy_search",
+        "name": "Implement fuzzy command search",
+        "elapsed_seconds": 12600,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1784908800
+      },
+      {
+        "id": "sentinel_json",
+        "name": "Implement JSON persistence",
+        "elapsed_seconds": 14400,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1785151800
+      },
+      {
+        "id": "sentineltasks_tree",
+        "name": "Implement SentinelTasks tree",
+        "elapsed_seconds": 11700,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1785434400
+      },
+      {
+        "id": "sentineltasks_editor",
+        "name": "Implement description editor",
+        "elapsed_seconds": 9000,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1785675600
+      },
+      {
+        "id": "sentinelstats_dashboard",
+        "name": "Implement GTK statistics dashboard",
+        "elapsed_seconds": 16200,
+        "running": false,
+        "completed": true,
+        "completed_at_epoch": 1785949200
+      },
+      {
+        "id": "shared_storage",
+        "name": "Implement shared storage layer",
+        "elapsed_seconds": 6900,
+        "running": true,
+        "completed": false,
+        "completed_at_epoch": 0
+      },
+      {
+        "id": "ipc_layer",
+        "name": "Implement Sentinel IPC layer",
+        "elapsed_seconds": 1800,
+        "running": false,
+        "completed": false,
+        "completed_at_epoch": 0
+      }
+    ]
+  },
+  "sentinelTasks": {
+    "nodes": [
+      {
+        "id": "sentinel_suite",
+        "name": "Sentinel Suite",
+        "description": "Umbrella project containing the terminal productivity tools and GTK statistics dashboard.",
+        "parent": null,
+        "type": "folder"
+      },
+      {
+        "id": "terminal_apps",
+        "name": "Terminal Applications",
+        "description": "ncurses applications for time tracking and hierarchical task organization.",
+        "parent": "sentinel_suite",
+        "type": "folder"
+      },
+      {
+        "id": "sentinel_app",
+        "name": "Sentinel",
+        "description": "Flat productivity tracker with timers, fuzzy commands, colors and JSON persistence.",
+        "parent": "terminal_apps",
+        "type": "task"
+      },
+      {
+        "id": "sentineltasks_app",
+        "name": "SentinelTasks",
+        "description": "Hierarchical tree-based task planner with descriptions and timers.",
+        "parent": "terminal_apps",
+        "type": "task"
+      },
+      {
+        "id": "stats_apps",
+        "name": "Statistics Applications",
+        "description": "Visual analytics and project progression tools.",
+        "parent": "sentinel_suite",
+        "type": "folder"
+      },
+      {
+        "id": "sentinelstats_app",
+        "name": "SentinelStats",
+        "description": "GTK dashboard visualizing task completion and lines-of-code progression.",
+        "parent": "stats_apps",
+        "type": "task"
+      }
+    ]
+  },
+  "statistics": {
+    "projects": [
+      {
+        "id": "sentinel",
+        "name": "Sentinel",
+        "loc_history": [
+          { "epoch": 1784541600, "lines": 420 },
+          { "epoch": 1784728800, "lines": 790 },
+          { "epoch": 1784908800, "lines": 1320 },
+          { "epoch": 1785151800, "lines": 2010 },
+          { "epoch": 1785434400, "lines": 2440 },
+          { "epoch": 1785675600, "lines": 2710 },
+          { "epoch": 1785949200, "lines": 2980 },
+          { "epoch": 1786215600, "lines": 3230 }
+        ]
+      },
+      {
+        "id": "sentineltasks",
+        "name": "SentinelTasks",
+        "loc_history": [
+          { "epoch": 1784541600, "lines": 0 },
+          { "epoch": 1784728800, "lines": 0 },
+          { "epoch": 1784908800, "lines": 180 },
+          { "epoch": 1785151800, "lines": 510 },
+          { "epoch": 1785434400, "lines": 1180 },
+          { "epoch": 1785675600, "lines": 1760 },
+          { "epoch": 1785949200, "lines": 2180 },
+          { "epoch": 1786215600, "lines": 2470 }
+        ]
+      },
+      {
+        "id": "sentinelstats",
+        "name": "SentinelStats",
+        "loc_history": [
+          { "epoch": 1784541600, "lines": 0 },
+          { "epoch": 1784728800, "lines": 0 },
+          { "epoch": 1784908800, "lines": 0 },
+          { "epoch": 1785151800, "lines": 0 },
+          { "epoch": 1785434400, "lines": 0 },
+          { "epoch": 1785675600, "lines": 220 },
+          { "epoch": 1785949200, "lines": 740 },
+          { "epoch": 1786215600, "lines": 1080 }
+        ]
+      }
+    ]
+  }
+}
