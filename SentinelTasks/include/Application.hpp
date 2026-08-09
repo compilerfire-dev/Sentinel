@@ -78,12 +78,14 @@ private:
     bool SubmitCommandDialog();
     std::string BuildDialogCommand() const;
     std::vector<std::string> NodeIdOptions(bool foldersOnly, bool includeRoot) const;
+    std::vector<std::string> TaskIdOptions() const;
     std::vector<std::string> ColorNameOptions() const;
     std::optional<std::size_t> FindOptionIndex(const std::vector<std::string>& options, const std::string& value) const;
 
     std::optional<RgbColor> ResolveColor(const std::string& value) const;
     bool DefineColor(const std::string& id, const std::string& rgbExpression);
     bool ApplyColorCommand(const std::vector<std::string>& tokens);
+    void ShowTimes();
 
     static std::string QuoteArgument(const std::string& value);
     static std::vector<std::string> Tokenize(const std::string& line);
