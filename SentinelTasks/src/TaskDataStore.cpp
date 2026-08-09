@@ -1,11 +1,11 @@
 #include "TaskDataStore.hpp"
 
+#include "JsonDataStore.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
-#include <filesystem>
-#include <fstream>
 #include <utility>
 
 using nlohmann::json;
@@ -37,25 +37,9 @@ bool TaskDataStore::Load(
     std::string& errorMessage
 ) const {
     try {
-        if (!std::filesystem::exists(path_)) {
-            tree = TaskTree{};
-            displaySettings = TreeDisplaySettings{};
-            definedColors.clear();
-            autoSaveInterval = std::chrono::seconds(1);
-            errorMessage.clear();
-            return true;
-        }
-
-        std::ifstream input(path_);
-        if (!input) {
-            errorMessage = "Could not open JSON file for reading: " + path_.string();
-            return false;
-        }
-
         json root;
-        input >> root;
-        if (!root.is_object()) {
-            errorMessage = "JSON root must be an object.";
+        bool exists = false;
+        if (!SentinelShared::JsonDataStore::Read(path_, root, exists, errorMessage)) {
             return false;
         }
 
@@ -64,7 +48,7 @@ bool TaskDataStore::Load(
         std::unordered_map<std::string, RgbColor> loadedColors;
         std::chrono::seconds loadedAutoSaveInterval{1};
 
-        if (!root.contains("sentinelTasks")) {
+        if (!exists || !root.contains("sentinelTasks")) {
             tree = std::move(loadedTree);
             displaySettings = loadedDisplay;
             definedColors = std::move(loadedColors);
@@ -182,103 +166,63 @@ bool TaskDataStore::Save(
     std::chrono::seconds autoSaveInterval,
     std::string& errorMessage
 ) const {
-    try {
-        if (path_.has_parent_path()) {
-            std::filesystem::create_directories(path_.parent_path());
-        }
-
-        json root = json::object();
-        if (std::filesystem::exists(path_)) {
-            std::ifstream input(path_);
-            if (!input) {
-                errorMessage = "Could not open JSON file before save: " + path_.string();
-                return false;
-            }
-            input >> root;
-            if (!root.is_object()) {
-                errorMessage = "JSON root must be an object.";
-                return false;
-            }
-        }
-
-        json data;
-        data["version"] = 1;
-        data["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
-        data["display"] = {
-            {"foreground", ColorToJson(displaySettings.foreground)},
-            {"background", ColorToJson(displaySettings.background)}
-        };
-        data["defined_colors"] = json::object();
-        for (const auto& [id, color] : definedColors) {
-            data["defined_colors"][id] = ColorToJson(color);
-        }
-
-        data["nodes"] = json::array();
-        for (const auto& visible : tree.Flatten()) {
-            if (!visible.node) continue;
-            const TaskNode& node = *visible.node;
-
-            json item = {
-                {"id", node.id},
-                {"name", node.name},
-                {"description", node.description},
-                {"parent", node.parentId},
-                {"type", node.kind == NodeKind::Folder ? "folder" : "task"}
-            };
-
-            if (node.foregroundColor && node.backgroundColor) {
-                item["color"] = {
-                    {"foreground", ColorToJson(*node.foregroundColor)},
-                    {"background", ColorToJson(*node.backgroundColor)}
-                };
-            }
-
-            if (node.kind == NodeKind::Task) {
-                const auto completedEpoch = node.completed
-                    ? std::chrono::duration_cast<std::chrono::seconds>(
-                        node.completedAt.time_since_epoch()
-                    ).count()
-                    : 0LL;
-
-                item["elapsed_seconds"] = node.Elapsed().count();
-                item["running"] = node.running;
-                item["completed"] = node.completed;
-                item["completed_at_epoch"] = completedEpoch;
-            }
-
-            data["nodes"].push_back(std::move(item));
-        }
-
-        root["sentinelTasks"] = std::move(data);
-
-        const std::filesystem::path temporary = path_.string() + ".tmp";
-        {
-            std::ofstream output(temporary);
-            if (!output) {
-                errorMessage = "Could not open temporary JSON file for writing: " + temporary.string();
-                return false;
-            }
-            output << root.dump(4) << '\n';
-        }
-
-        std::error_code error;
-        std::filesystem::rename(temporary, path_, error);
-        if (error) {
-            std::filesystem::remove(path_, error);
-            error.clear();
-            std::filesystem::rename(temporary, path_, error);
-        }
-        if (error) {
-            errorMessage = "Could not replace JSON file: " + error.message();
-            return false;
-        }
-
-        errorMessage.clear();
-        return true;
-    } catch (const std::exception& exception) {
-        errorMessage = "Failed to save SentinelTasks JSON: " + std::string(exception.what());
-        return false;
+    json data;
+    data["version"] = 1;
+    data["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
+    data["display"] = {
+        {"foreground", ColorToJson(displaySettings.foreground)},
+        {"background", ColorToJson(displaySettings.background)}
+    };
+    data["defined_colors"] = json::object();
+    for (const auto& [id, color] : definedColors) {
+        data["defined_colors"][id] = ColorToJson(color);
     }
+
+    data["nodes"] = json::array();
+    for (const auto& visible : tree.Flatten()) {
+        if (!visible.node) continue;
+        const TaskNode& node = *visible.node;
+
+        json item = {
+            {"id", node.id},
+            {"name", node.name},
+            {"description", node.description},
+            {"parent", node.parentId},
+            {"type", node.kind == NodeKind::Folder ? "folder" : "task"}
+        };
+
+        if (node.foregroundColor && node.backgroundColor) {
+            item["color"] = {
+                {"foreground", ColorToJson(*node.foregroundColor)},
+                {"background", ColorToJson(*node.backgroundColor)}
+            };
+        }
+
+        if (node.kind == NodeKind::Task) {
+            const auto completedEpoch = node.completed
+                ? std::chrono::duration_cast<std::chrono::seconds>(
+                    node.completedAt.time_since_epoch()
+                ).count()
+                : 0LL;
+
+            item["elapsed_seconds"] = node.Elapsed().count();
+            item["running"] = node.running;
+            item["completed"] = node.completed;
+            item["completed_at_epoch"] = completedEpoch;
+        }
+
+        data["nodes"].push_back(std::move(item));
+    }
+
+    return SentinelShared::JsonDataStore::Update(
+        path_,
+        [data = std::move(data)](json& root, std::string& mutationError) mutable {
+            root["sentinelTasks"] = std::move(data);
+            mutationError.clear();
+            return true;
+        },
+        errorMessage
+    );
 }
 
 void TaskDataStore::SetPath(std::filesystem::path path) {
