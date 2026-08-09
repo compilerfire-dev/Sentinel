@@ -29,8 +29,10 @@ constexpr std::array<CommandDefinition, 17> Commands{{
 }};
 
 constexpr std::size_t MaxSuggestions = 6;
+constexpr std::size_t MouseWheelStep = 3;
 constexpr short DefaultTreePair = 1;
 constexpr short FirstNodePair = 2;
+std::size_t TreeScrollOffset = 0;
 
 const std::vector<std::string> CommandHelp{
     "addFolder <id> <parent|root> <name>            Add a folder/category node",
@@ -69,6 +71,41 @@ const std::unordered_map<std::string, RgbColor> BuiltInColors{
 struct DialogRect { int top{}, left{}, height{}, width{}; };
 
 bool IsUtf8Continuation(unsigned char c) { return (c & 0xC0U) == 0x80U; }
+
+bool IsWheelUp(mmask_t state) {
+#ifdef BUTTON4_PRESSED
+    if ((state & BUTTON4_PRESSED) != 0) return true;
+#endif
+#ifdef BUTTON4_CLICKED
+    if ((state & BUTTON4_CLICKED) != 0) return true;
+#endif
+    return false;
+}
+
+bool IsWheelDown(mmask_t state) {
+#ifdef BUTTON5_PRESSED
+    if ((state & BUTTON5_PRESSED) != 0) return true;
+#endif
+#ifdef BUTTON5_CLICKED
+    if ((state & BUTTON5_CLICKED) != 0) return true;
+#endif
+    return false;
+}
+
+std::size_t TreeViewportCapacity() {
+    int h=0,w=0;getmaxyx(stdscr,h,w);(void)w;
+    return static_cast<std::size_t>(std::max(0,h-5));
+}
+
+void KeepTreeIndexVisible(std::size_t index,std::size_t total) {
+    const std::size_t capacity=TreeViewportCapacity();
+    if(capacity==0){TreeScrollOffset=0;return;}
+    const std::size_t maxOffset=total>capacity?total-capacity:0;
+    TreeScrollOffset=std::min(TreeScrollOffset,maxOffset);
+    if(index<TreeScrollOffset)TreeScrollOffset=index;
+    else if(index>=TreeScrollOffset+capacity)TreeScrollOffset=index-capacity+1;
+    TreeScrollOffset=std::min(TreeScrollOffset,maxOffset);
+}
 
 std::string Trim(std::string value) {
     const auto first = value.find_first_not_of(" \t");
@@ -206,6 +243,7 @@ bool Application::LoadCurrentData() {
         return false;
     }
     lastAutosave_ = std::chrono::steady_clock::now();
+    TreeScrollOffset=0;
     selectedId_.clear();
     EnsureSelection();
     return true;
@@ -238,6 +276,7 @@ bool Application::SetJsonFile(const std::string& path) {
     }
 
     lastAutosave_ = std::chrono::steady_clock::now();
+    TreeScrollOffset=0;
     selectedId_.clear();
     EnsureSelection();
     infoLines_.clear();
@@ -300,8 +339,20 @@ void Application::HandleInput() {
 }
 
 void Application::HandleMouse() {
-    MEVENT e{}; if(getmouse(&e)!=OK) return; if((e.bstate&BUTTON1_CLICKED)==0&&(e.bstate&BUTTON1_PRESSED)==0) return;
-    int h=0,w=0;getmaxyx(stdscr,h,w);(void)w;
+    MEVENT e{};if(getmouse(&e)!=OK)return;
+    int h=0,w=0;getmaxyx(stdscr,h,w);
+    const int divider=std::clamp(w*64/100,40,std::max(40,w-30));
+
+    if((IsWheelUp(e.bstate)||IsWheelDown(e.bstate))&&e.x<=divider){
+        const std::size_t capacity=TreeViewportCapacity();
+        const std::size_t total=!infoLines_.empty()?infoLines_.size():tree_.Flatten().size();
+        const std::size_t maxOffset=total>capacity?total-capacity:0;
+        if(IsWheelUp(e.bstate))TreeScrollOffset=TreeScrollOffset>MouseWheelStep?TreeScrollOffset-MouseWheelStep:0;
+        else TreeScrollOffset=std::min(maxOffset,TreeScrollOffset+MouseWheelStep);
+        return;
+    }
+
+    if((e.bstate&BUTTON1_CLICKED)==0&&(e.bstate&BUTTON1_PRESSED)==0)return;
     if(manualSelect_){const int i=e.y-2;if(i>=0&&i<static_cast<int>(visibleRowIds_.size()))selectedId_=visibleRowIds_[static_cast<std::size_t>(i)];return;}
     if(e.y==h-1){cursorPosition_=std::min(commandBuffer_.size(),static_cast<std::size_t>(std::max(0,e.x-2)));return;}
     const auto s=BuildSuggestions();if(s.empty())return;const int start=std::max(2,h-2-static_cast<int>(s.size()));if(e.y>=start&&e.y<start+static_cast<int>(s.size())){selectedSuggestion_=static_cast<std::size_t>(e.y-start);AcceptSuggestion(s);}
@@ -342,9 +393,9 @@ void Application::ExecuteCommand(const std::string& line) {
 
     if(t.size()==1&&OpenCommandDialog(c))return;
     if(c=="quit"||c=="exit"){running_=false;return;}
-    if(c=="commands"){infoLines_=CommandHelp;status_="Available SentinelTasks commands.";return;}
-    if(c=="list"){status_="Tree view.";return;}
-    if(c=="showTimes"){ShowTimes();return;}
+    if(c=="commands"){TreeScrollOffset=0;infoLines_=CommandHelp;status_="Available SentinelTasks commands.";return;}
+    if(c=="list"){TreeScrollOffset=0;status_="Tree view.";return;}
+    if(c=="showTimes"){TreeScrollOffset=0;ShowTimes();return;}
     if(c=="defineColor"){if(t.size()!=3)status_="Usage: defineColor <name> rgb(r,g,b)";else DefineColor(t[1],t[2]);return;}
     if(c=="color"){ApplyColorCommand(t);return;}
     if(c=="start"||c=="stop"||c=="done"){
@@ -352,9 +403,9 @@ void Application::ExecuteCommand(const std::string& line) {
         if(c=="start")ok=tree_.StartTask(t[1],error);else if(c=="stop")ok=tree_.StopTask(t[1],error);else ok=tree_.CompleteTask(t[1],error);
         status_=ok?(c=="start"?"Task started: ":c=="stop"?"Task stopped: ":"Task completed: ")+t[1]:error;return;
     }
-    if(c=="select"){if(t.size()!=2||!tree_.GetNode(t[1]))status_="Usage: select <existing-id>";else{selectedId_=t[1];status_="Selected: "+selectedId_;}return;}
+    if(c=="select"){if(t.size()!=2||!tree_.GetNode(t[1]))status_="Usage: select <existing-id>";else{selectedId_=t[1];const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}status_="Selected: "+selectedId_;}return;}
     if(c=="remove"){if(t.size()!=2){status_="Usage: remove <id>";return;}std::string error;if(!tree_.RemoveNode(t[1],error))status_=error;else{if(!tree_.GetNode(selectedId_))selectedId_.clear();EnsureSelection();status_="Removed: "+t[1];}return;}
-    if(c=="addFolder"||c=="addTask"){if(t.size()<4){status_="Usage: "+c+" <id> <parent|root> <name>";return;}std::string error;const NodeKind kind=c=="addFolder"?NodeKind::Folder:NodeKind::Task;if(!tree_.AddNode(kind,t[1],t[2],JoinTokens(t,3),error))status_=error;else{selectedId_=t[1];status_=std::string(kind==NodeKind::Folder?"Folder added: ":"Task added: ")+t[1];}return;}
+    if(c=="addFolder"||c=="addTask"){if(t.size()<4){status_="Usage: "+c+" <id> <parent|root> <name>";return;}std::string error;const NodeKind kind=c=="addFolder"?NodeKind::Folder:NodeKind::Task;if(!tree_.AddNode(kind,t[1],t[2],JoinTokens(t,3),error))status_=error;else{selectedId_=t[1];const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}status_=std::string(kind==NodeKind::Folder?"Folder added: ":"Task added: ")+t[1];}return;}
     status_="Unknown command: "+c+". Type 'commands'.";
 }
 
@@ -403,12 +454,12 @@ void Application::Render(){erase();attr_set(A_NORMAL,0,nullptr);EnsureSelection(
 
 void Application::RenderHeader(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);(void)h;const std::string mode=descriptionEditing_?"DESCRIPTION EDIT":commandDialog_?"COMMAND ARGUMENT WINDOW":manualSelect_?"MANUAL SELECT":"Tree Task Planner";const std::string title="SentinelTasks | "+mode+" | "+dataStore_.Path().string()+" | autoSave "+SentinelShared::FormatDuration(autoSaveInterval_);DrawClipped(0,0,std::max(0,w-1),title);if(w>1)mvhline(1,0,ACS_HLINE,w-1);}
 
-void Application::RenderTree(){int h=0,w=0;getmaxyx(stdscr,h,w);const int divider=std::clamp(w*64/100,40,std::max(40,w-30));const int treeWidth=std::max(1,divider-2),last=std::max(2,h-3);visibleRowIds_.clear();if(!infoLines_.empty()){attr_set(A_NORMAL,0,nullptr);int row=2;for(const auto& l:infoLines_){if(row>=last)break;DrawClipped(row++,0,treeWidth,l);}return;}const auto visible=tree_.Flatten();int row=2;std::size_t vi=0;for(const auto& e:visible){if(row>=last||!e.node)break;const auto& n=*e.node;const bool selected=n.id==selectedId_;short pair=DefaultTreePair;if(has_colors()&&n.foregroundColor&&n.backgroundColor){const short candidate=static_cast<short>(FirstNodePair+vi);if(candidate>0&&candidate<COLOR_PAIRS&&InitializeColorPair(candidate,*n.foregroundColor,*n.backgroundColor))pair=candidate;}if(has_colors())attr_set(selected?A_REVERSE:A_NORMAL,pair,nullptr);else if(selected)attron(A_REVERSE);const std::string kind=n.kind==NodeKind::Folder?"[F] ":n.completed?"[x] ":n.running?"[>] ":"[T] ";DrawClipped(row,0,treeWidth,e.connectorPrefix+kind+n.name+"  {"+n.id+"}");attr_set(A_NORMAL,0,nullptr);visibleRowIds_.push_back(n.id);++row;++vi;}if(visible.empty())DrawClipped(3,0,treeWidth,"No nodes yet. Use addFolder or addTask.");}
+void Application::RenderTree(){int h=0,w=0;getmaxyx(stdscr,h,w);const int divider=std::clamp(w*64/100,40,std::max(40,w-30));const int treeWidth=std::max(1,divider-2),last=std::max(2,h-3);const std::size_t capacity=static_cast<std::size_t>(std::max(0,last-2));visibleRowIds_.clear();if(!infoLines_.empty()){attr_set(A_NORMAL,0,nullptr);const std::size_t maxOffset=infoLines_.size()>capacity?infoLines_.size()-capacity:0;TreeScrollOffset=std::min(TreeScrollOffset,maxOffset);int row=2;for(std::size_t i=TreeScrollOffset;i<infoLines_.size()&&row<last;++i)DrawClipped(row++,0,treeWidth,infoLines_[i]);return;}const auto visible=tree_.Flatten();const std::size_t maxOffset=visible.size()>capacity?visible.size()-capacity:0;TreeScrollOffset=std::min(TreeScrollOffset,maxOffset);int row=2;std::size_t slot=0;for(std::size_t vi=TreeScrollOffset;vi<visible.size();++vi){const auto& e=visible[vi];if(row>=last||!e.node)break;const auto& n=*e.node;const bool selected=n.id==selectedId_;short pair=DefaultTreePair;if(has_colors()&&n.foregroundColor&&n.backgroundColor){const short candidate=static_cast<short>(FirstNodePair+slot);if(candidate>0&&candidate<COLOR_PAIRS&&InitializeColorPair(candidate,*n.foregroundColor,*n.backgroundColor))pair=candidate;}if(has_colors())attr_set(selected?A_REVERSE:A_NORMAL,pair,nullptr);else if(selected)attron(A_REVERSE);const std::string kind=n.kind==NodeKind::Folder?"[F] ":n.completed?"[x] ":n.running?"[>] ":"[T] ";DrawClipped(row,0,treeWidth,e.connectorPrefix+kind+n.name+"  {"+n.id+"}");attr_set(A_NORMAL,0,nullptr);visibleRowIds_.push_back(n.id);++row;++slot;}if(visible.empty())DrawClipped(3,0,treeWidth,"No nodes yet. Use addFolder or addTask.");}
 
 void Application::RenderDescriptionPane(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);const int d=std::clamp(w*64/100,40,std::max(40,w-30));if(d>=w-2)return;for(int r=2;r<h-2;++r)mvaddch(r,d,ACS_VLINE);const int col=d+2,pw=std::max(1,w-col-1);DrawClipped(2,col,pw,descriptionEditing_?"Description / Timing [EDITING]":"Description / Timing");mvhline(3,col,ACS_HLINE,pw);const TaskNode* n=tree_.GetNode(selectedId_);if(!n){DrawClipped(5,col,pw,"No task selected.");return;}DrawClipped(5,col,pw,"ID: "+n->id);DrawClipped(6,col,pw,"Type: "+std::string(n->kind==NodeKind::Folder?"folder":"task"));int nameRow=8,descStart=10;if(n->kind==NodeKind::Task){const std::string state=n->completed?"completed":n->running?"running":"idle";DrawClipped(7,col,pw,"Timer: "+n->ElapsedString()+"   State: "+state);DrawClipped(8,col,pw,"Completed: "+n->CompletionString());nameRow=10;descStart=12;}DrawClipped(nameRow,col,pw,n->name);if(descriptionEditing_&&descriptionEditNodeId_==n->id){for(int r=descStart;r<h-3;++r){move(r,col);for(int x=0;x<pw;++x)addch(' ');}const auto lines=WrapText(descriptionEditBuffer_,pw);int row=descStart;for(const auto& l:lines){if(row>=h-3)break;DrawClipped(row++,col,pw,l);}std::size_t logicalLineStart=descriptionEditBuffer_.rfind('\n',descriptionEditCursor_==0?0:descriptionEditCursor_-1);logicalLineStart=logicalLineStart==std::string::npos?0:logicalLineStart+1;std::size_t logicalLine=0;for(std::size_t p=0;p<logicalLineStart;++p)if(descriptionEditBuffer_[p]=='\n')++logicalLine;const int cursorRow=std::min(h-4,descStart+static_cast<int>(logicalLine));const int cursorCol=std::min(col+pw-1,col+static_cast<int>(descriptionEditCursor_-logicalLineStart));curs_set(1);move(cursorRow,cursorCol);return;}const auto lines=WrapText(n->description.empty()?"(No description)":n->description,pw);int row=descStart;for(const auto& l:lines){if(row>=h-3)break;DrawClipped(row++,col,pw,l);}}
 
 void Application::RenderSuggestions(const std::vector<Suggestion>& s){if(s.empty())return;attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);const int start=std::max(2,h-2-static_cast<int>(s.size()));for(std::size_t i=0;i<s.size();++i){if(i==selectedSuggestion_)attron(A_REVERSE);DrawClipped(start+static_cast<int>(i),0,w-1,(i==selectedSuggestion_?"> ":"  ")+s[i].label);if(i==selectedSuggestion_)attroff(A_REVERSE);}}
-void Application::RenderStatus(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);std::string s=status_;if(descriptionEditing_)s+=" | Type in right pane | Enter newline | F2 save | Esc cancel | Left/Right cursor | mouse place cursor";else if(commandDialog_)s+=" | Tab next | Shift+Tab previous | Enter choose | F2 submit | Esc cancel";else if(manualSelect_)s+=" | Up/Down select | Left parent | Right child | Mouse click | Enter/Esc finish";DrawClipped(h-2,0,w-1,s);}
+void Application::RenderStatus(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);std::string s=status_;if(descriptionEditing_)s+=" | Type in right pane | Enter newline | F2 save | Esc cancel | Left/Right cursor | mouse place cursor";else if(commandDialog_)s+=" | Tab next | Shift+Tab previous | Enter choose | F2 submit | Esc cancel";else if(manualSelect_)s+=" | Up/Down select | Left parent | Right child | Mouse click/wheel | Enter/Esc finish";else s+=" | Mouse wheel over tree: scroll items";DrawClipped(h-2,0,w-1,s);}
 void Application::RenderCommandLine(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);move(h-1,0);clrtoeol();if(descriptionEditing_){DrawClipped(h-1,0,w-1,"> [editing description: "+descriptionEditNodeId_+"]  F2 save | Esc cancel");return;}if(commandDialog_){curs_set(0);DrawClipped(h-1,0,w-1,"> [argument window: "+commandDialog_->command+"]");return;}if(manualSelect_){curs_set(0);DrawClipped(h-1,0,w-1,"> [manualSelect] "+selectedId_);return;}curs_set(1);DrawClipped(h-1,0,2,"> ");DrawClipped(h-1,2,w-3,commandBuffer_);move(h-1,std::min(w-1,static_cast<int>(cursorPosition_)+2));}
 
 void Application::RenderCommandDialog(){if(!commandDialog_)return;attr_set(A_NORMAL,0,nullptr);auto& d=*commandDialog_;const auto r=CalculateDialogRect(d.fields.size());for(int y=r.top;y<r.top+r.height;++y){move(y,r.left);for(int x=0;x<r.width;++x)addch(' ');}mvhline(r.top,r.left+1,ACS_HLINE,r.width-2);mvhline(r.top+r.height-1,r.left+1,ACS_HLINE,r.width-2);mvvline(r.top+1,r.left,ACS_VLINE,r.height-2);mvvline(r.top+1,r.left+r.width-1,ACS_VLINE,r.height-2);mvaddch(r.top,r.left,ACS_ULCORNER);mvaddch(r.top,r.left+r.width-1,ACS_URCORNER);mvaddch(r.top+r.height-1,r.left,ACS_LLCORNER);mvaddch(r.top+r.height-1,r.left+r.width-1,ACS_LRCORNER);DrawClipped(r.top+1,r.left+3,r.width-6,d.title);DrawClipped(r.top+2,r.left+3,r.width-6,"Fill arguments manually. CLI arguments remain supported.");const int lw=std::min(18,std::max(10,r.width/4)),ic=r.left+3+lw,iw=std::max(10,r.width-lw-7);for(std::size_t i=0;i<d.fields.size();++i){auto& f=d.fields[i];const int row=DialogFieldRow(r,i);DrawClipped(row,r.left+3,lw-1,f.label+":");if(d.focusedControl==i)attron(A_REVERSE);const std::string v=f.value.empty()&&f.kind==DialogFieldKind::DropList?"(no options)":f.value;DrawClipped(row,ic,iw,"[ "+v+(f.kind==DialogFieldKind::DropList?"  v":"")+" ]");if(d.focusedControl==i)attroff(A_REVERSE);}const std::size_t submit=d.fields.size(),cancel=submit+1;const int br=r.top+r.height-3,sc=r.left+r.width/2-14,cc=r.left+r.width/2+3;if(d.focusedControl==submit)attron(A_REVERSE);DrawClipped(br,sc,12,"[ Submit ]");if(d.focusedControl==submit)attroff(A_REVERSE);if(d.focusedControl==cancel)attron(A_REVERSE);DrawClipped(br,cc,12,"[ Cancel ]");if(d.focusedControl==cancel)attroff(A_REVERSE);DrawClipped(r.top+r.height-2,r.left+3,r.width-6,d.validationMessage);if(d.focusedControl<d.fields.size()&&d.fields[d.focusedControl].kind==DialogFieldKind::TextInput){curs_set(1);move(DialogFieldRow(r,d.focusedControl),std::min(ic+iw-2,ic+2+static_cast<int>(d.fields[d.focusedControl].cursor)));}else curs_set(0);}
@@ -420,11 +471,11 @@ void Application::AddCommandToHistory(const std::string& c){if(!c.empty()&&(comm
 void Application::RecallPreviousCommand(){if(commandHistory_.empty())return;if(!historyIndex_){commandBeforeHistory_=commandBuffer_;historyIndex_=commandHistory_.size()-1;}else if(*historyIndex_>0)--*historyIndex_;commandBuffer_=commandHistory_[*historyIndex_];cursorPosition_=commandBuffer_.size();}
 void Application::RecallNextCommand(){if(!historyIndex_)return;if(*historyIndex_+1<commandHistory_.size()){++*historyIndex_;commandBuffer_=commandHistory_[*historyIndex_];}else{commandBuffer_=commandBeforeHistory_;ResetHistoryNavigation();}cursorPosition_=commandBuffer_.size();}
 void Application::ResetHistoryNavigation(){historyIndex_.reset();commandBeforeHistory_.clear();}
-void Application::EnterManualSelect(const std::optional<std::string>& id){if(tree_.Empty()){status_="Cannot enter manualSelect: tree is empty.";return;}if(id){if(!tree_.GetNode(*id)){status_="Node ID does not exist: "+*id;return;}selectedId_=*id;}EnsureSelection();manualSelect_=true;status_="Manual selection mode.";}
+void Application::EnterManualSelect(const std::optional<std::string>& id){if(tree_.Empty()){status_="Cannot enter manualSelect: tree is empty.";return;}if(id){if(!tree_.GetNode(*id)){status_="Node ID does not exist: "+*id;return;}selectedId_=*id;}EnsureSelection();const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}manualSelect_=true;status_="Manual selection mode.";}
 void Application::LeaveManualSelect(){manualSelect_=false;curs_set(1);}
-void Application::MoveManualSelection(int delta){const auto v=tree_.Flatten();if(v.empty())return;std::size_t i=0;for(std::size_t j=0;j<v.size();++j)if(v[j].node&&v[j].node->id==selectedId_){i=j;break;}i=delta<0?(i==0?v.size()-1:i-1):(i+1)%v.size();selectedId_=v[i].node->id;}
-void Application::SelectParent(){if(const auto p=tree_.ParentOf(selectedId_))selectedId_=*p;}
-void Application::SelectFirstChild(){if(const auto c=tree_.FirstChildOf(selectedId_))selectedId_=*c;}
+void Application::MoveManualSelection(int delta){const auto v=tree_.Flatten();if(v.empty())return;std::size_t i=0;for(std::size_t j=0;j<v.size();++j)if(v[j].node&&v[j].node->id==selectedId_){i=j;break;}i=delta<0?(i==0?v.size()-1:i-1):(i+1)%v.size();selectedId_=v[i].node->id;KeepTreeIndexVisible(i,v.size());}
+void Application::SelectParent(){if(const auto p=tree_.ParentOf(selectedId_)){selectedId_=*p;const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}}}
+void Application::SelectFirstChild(){if(const auto c=tree_.FirstChildOf(selectedId_)){selectedId_=*c;const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}}}
 void Application::EnsureSelection(){if(!selectedId_.empty()&&tree_.GetNode(selectedId_))return;const auto v=tree_.Flatten();selectedId_=v.empty()?std::string{}:v.front().node->id;}
 
 bool Application::OpenCommandDialog(const std::string& command){CommandDialog d;d.command=command;d.title="Command: "+command;auto text=[](std::string label,std::string value={}){DialogField f;f.label=std::move(label);f.value=std::move(value);f.cursor=f.value.size();return f;};auto drop=[&](std::string label,std::vector<std::string> options,std::string preferred={}){DialogField f;f.label=std::move(label);f.kind=DialogFieldKind::DropList;f.options=std::move(options);f.selectedOption=FindOptionIndex(f.options,preferred).value_or(0);if(!f.options.empty())f.value=f.options[f.selectedOption];return f;};if(command=="setDescription"||command=="setJsonFile"||command=="manualSelect")return false;if(command=="autoSave")d.fields.push_back(text("Duration",SentinelShared::FormatDuration(autoSaveInterval_)));else if(command=="addFolder"||command=="addTask"){d.fields.push_back(text("ID"));std::string parent="root";if(const auto* n=tree_.GetNode(selectedId_)){if(n->kind==NodeKind::Folder)parent=n->id;else if(!n->parentId.empty())parent=n->parentId;}d.fields.push_back(drop("Parent",NodeIdOptions(true,true),parent));d.fields.push_back(text("Name"));}else if(command=="remove"||command=="select")d.fields.push_back(drop("Node",NodeIdOptions(false,false),selectedId_));else if(command=="start"||command=="stop"||command=="done")d.fields.push_back(drop("Task",TaskIdOptions(),selectedId_));else if(command=="defineColor"){d.fields.push_back(text("Color name"));d.fields.push_back(text("RGB","rgb(255,255,255)"));}else if(command=="color"){auto targets=NodeIdOptions(false,false);targets.insert(targets.begin(),"default");d.fields.push_back(drop("Target",std::move(targets),selectedId_.empty()?"default":selectedId_));d.fields.push_back(drop("Foreground",ColorNameOptions(),"white"));d.fields.push_back(drop("Background",ColorNameOptions(),"black"));}else return false;commandDialog_=std::move(d);status_="Argument window opened for: "+command;return true;}
