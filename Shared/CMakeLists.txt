@@ -17,3 +17,12 @@ target_compile_options(SentinelShared PRIVATE
     -Wextra
     -Wpedantic
 )
+
+if(BUILD_TESTING)
+    add_executable(SentinelSharedConcurrencyTest
+        tests/JsonDataStoreConcurrencyTest.cpp
+    )
+    target_link_libraries(SentinelSharedConcurrencyTest PRIVATE SentinelShared)
+    add_test(NAME SentinelShared.ConcurrentJsonTransactions
+             COMMAND SentinelSharedConcurrencyTest)
+endif()
