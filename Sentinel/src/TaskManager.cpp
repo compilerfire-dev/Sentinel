@@ -12,6 +12,7 @@
 using nlohmann::json;
 
 namespace {
+
 json ColorToJson(const RgbColor& color) {
     return {{"red", color.red}, {"green", color.green}, {"blue", color.blue}};
 }
@@ -23,7 +24,23 @@ RgbColor ColorFromJson(const json& value) {
         value.value("blue", 255)
     };
 }
+
+const json* SentinelSectionForRead(const json& root) {
+    if (root.contains("sentinel") && root["sentinel"].is_object() &&
+        root["sentinel"].contains("tasks")) {
+        return &root["sentinel"];
+    }
+    return &root;
 }
+
+json* SentinelSectionForWrite(json& root) {
+    if (root.contains("sentinel") && root["sentinel"].is_object()) {
+        return &root["sentinel"];
+    }
+    return &root;
+}
+
+} // namespace
 
 Task* TaskManager::AddTask(std::string id, std::string name) {
     if (id.empty() || name.empty() || GetTaskById(id)) return nullptr;
@@ -39,8 +56,13 @@ bool TaskManager::RemoveTask(std::size_t index) {
 
 void TaskManager::Clear() { tasks_.clear(); }
 
-Task* TaskManager::GetTask(std::size_t index) { return index < tasks_.size() ? &tasks_[index] : nullptr; }
-const Task* TaskManager::GetTask(std::size_t index) const { return index < tasks_.size() ? &tasks_[index] : nullptr; }
+Task* TaskManager::GetTask(std::size_t index) {
+    return index < tasks_.size() ? &tasks_[index] : nullptr;
+}
+
+const Task* TaskManager::GetTask(std::size_t index) const {
+    return index < tasks_.size() ? &tasks_[index] : nullptr;
+}
 
 Task* TaskManager::GetTaskById(const std::string& id) {
     const auto index = FindIndexById(id);
@@ -66,7 +88,10 @@ std::vector<TaskSearchResult> TaskManager::FuzzySearchTasks(const std::string& q
         const auto nameScore = FuzzySearch::Score(query, task.GetName());
         const auto idScore = FuzzySearch::Score(query, task.GetId());
         if (!nameScore && !idScore) continue;
-        results.push_back({index, std::max(nameScore.value_or(-100000), idScore.value_or(-100000) + 20)});
+        results.push_back({
+            index,
+            std::max(nameScore.value_or(-100000), idScore.value_or(-100000) + 20)
+        });
     }
     std::stable_sort(results.begin(), results.end(), [](const auto& a, const auto& b) {
         return a.score != b.score ? a.score > b.score : a.index < b.index;
@@ -85,7 +110,9 @@ std::vector<std::size_t> TaskManager::Search(const std::string& query) const {
 std::optional<std::size_t> TaskManager::FindBestMatch(const std::string& query) const {
     if (const auto exact = FindIndexById(query)) return exact;
     const auto results = FuzzySearchTasks(query);
-    return results.empty() ? std::nullopt : std::optional<std::size_t>{results.front().index};
+    return results.empty()
+        ? std::nullopt
+        : std::optional<std::size_t>{results.front().index};
 }
 
 void TaskManager::DefineColor(std::string id, const RgbColor& color) {
@@ -104,17 +131,39 @@ const std::unordered_map<std::string, RgbColor>& TaskManager::GetDefinedColors()
 
 bool TaskManager::Save(std::string& errorMessage) const {
     try {
-        json root;
-        root["version"] = 3;
-        root["defined_colors"] = json::object();
-        root["tasks"] = json::array();
+        const std::filesystem::path path(jsonFilePath_);
+        if (path.has_parent_path()) {
+            std::filesystem::create_directories(path.parent_path());
+        }
+
+        json root = json::object();
+        if (std::filesystem::exists(path)) {
+            std::ifstream existing(path);
+            if (!existing) {
+                errorMessage = "Could not open JSON file for reading before save: " + jsonFilePath_;
+                return false;
+            }
+            existing >> root;
+            if (!root.is_object()) {
+                errorMessage = "JSON root must be an object: " + jsonFilePath_;
+                return false;
+            }
+        }
+
+        json* section = SentinelSectionForWrite(root);
+        (*section)["version"] = 3;
+        (*section)["defined_colors"] = json::object();
+        (*section)["tasks"] = json::array();
 
         for (const auto& [id, color] : definedColors_) {
-            root["defined_colors"][id] = ColorToJson(color);
+            (*section)["defined_colors"][id] = ColorToJson(color);
         }
 
         for (const Task& task : tasks_) {
-            const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(task.GetCompletionTime().time_since_epoch()).count();
+            const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+                task.GetCompletionTime().time_since_epoch()
+            ).count();
+
             json item = {
                 {"id", task.GetId()},
                 {"name", task.GetName()},
@@ -123,17 +172,16 @@ bool TaskManager::Save(std::string& errorMessage) const {
                 {"completed", task.IsCompleted()},
                 {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0}
             };
+
             if (task.HasCustomColor()) {
                 item["color"] = {
                     {"foreground", ColorToJson(*task.GetForegroundColor())},
                     {"background", ColorToJson(*task.GetBackgroundColor())}
                 };
             }
-            root["tasks"].push_back(std::move(item));
+            (*section)["tasks"].push_back(std::move(item));
         }
 
-        const std::filesystem::path path(jsonFilePath_);
-        if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
         std::ofstream output(path);
         if (!output) {
             errorMessage = "Could not open JSON file for writing: " + jsonFilePath_;
@@ -156,46 +204,70 @@ bool TaskManager::Load(std::string& errorMessage) {
             definedColors_.clear();
             return Save(errorMessage);
         }
+
         std::ifstream input(path);
         if (!input) {
             errorMessage = "Could not open JSON file for reading: " + jsonFilePath_;
             return false;
         }
+
         json root;
         input >> root;
-        if (!root.contains("tasks") || !root["tasks"].is_array()) {
-            errorMessage = "JSON file does not contain a tasks array.";
+        if (!root.is_object()) {
+            errorMessage = "JSON root must be an object.";
+            return false;
+        }
+
+        const json& data = *SentinelSectionForRead(root);
+        if (!data.contains("tasks") || !data["tasks"].is_array()) {
+            errorMessage = "JSON file does not contain a Sentinel tasks array.";
             return false;
         }
 
         std::vector<Task> loaded;
         std::unordered_map<std::string, RgbColor> loadedColors;
 
-        if (root.contains("defined_colors") && root["defined_colors"].is_object()) {
-            for (auto iterator = root["defined_colors"].begin(); iterator != root["defined_colors"].end(); ++iterator) {
+        if (data.contains("defined_colors") && data["defined_colors"].is_object()) {
+            for (auto iterator = data["defined_colors"].begin();
+                 iterator != data["defined_colors"].end(); ++iterator) {
                 loadedColors[iterator.key()] = ColorFromJson(iterator.value());
             }
         }
 
         std::size_t legacyIndex = 0;
-        for (const auto& item : root["tasks"]) {
+        for (const auto& item : data["tasks"]) {
             const std::string id = item.value("id", std::to_string(legacyIndex++));
-            if (std::any_of(loaded.begin(), loaded.end(), [&](const Task& task) { return task.GetId() == id; })) {
+            if (std::any_of(
+                    loaded.begin(), loaded.end(),
+                    [&](const Task& task) { return task.GetId() == id; })) {
                 errorMessage = "Duplicate task ID in JSON: " + id;
                 return false;
             }
+
             Task task(id, item.at("name").get<std::string>());
-            const auto elapsed = std::chrono::seconds(item.value("elapsed_seconds", 0LL));
+            const auto elapsed = std::chrono::seconds(
+                item.value("elapsed_seconds", 0LL)
+            );
             const bool completed = item.value("completed", false);
             const bool running = item.value("running", false);
             const auto epoch = item.value("completed_at_epoch", 0LL);
-            task.Restore(elapsed, completed, running, Task::SystemClock::time_point(std::chrono::seconds(epoch)));
+            task.Restore(
+                elapsed,
+                completed,
+                running,
+                Task::SystemClock::time_point(std::chrono::seconds(epoch))
+            );
+
             if (item.contains("color")) {
                 const auto& color = item["color"];
-                task.SetColor(ColorFromJson(color.at("foreground")), ColorFromJson(color.at("background")));
+                task.SetColor(
+                    ColorFromJson(color.at("foreground")),
+                    ColorFromJson(color.at("background"))
+                );
             }
             loaded.push_back(std::move(task));
         }
+
         tasks_ = std::move(loaded);
         definedColors_ = std::move(loadedColors);
         errorMessage.clear();
@@ -211,21 +283,30 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
         errorMessage = "JSON file path cannot be empty.";
         return false;
     }
+
     std::string saveError;
     if (!Save(saveError)) {
         errorMessage = "Current data could not be saved before switching: " + saveError;
         return false;
     }
+
     const std::string previousPath = jsonFilePath_;
     const std::vector<Task> previousTasks = tasks_;
     const auto previousColors = definedColors_;
+
     jsonFilePath_ = path;
     if (Load(errorMessage)) return true;
+
     jsonFilePath_ = previousPath;
     tasks_ = previousTasks;
     definedColors_ = previousColors;
     return false;
 }
 
-const std::string& TaskManager::GetJsonFile() const noexcept { return jsonFilePath_; }
-const std::vector<Task>& TaskManager::GetTasks() const noexcept { return tasks_; }
+const std::string& TaskManager::GetJsonFile() const noexcept {
+    return jsonFilePath_;
+}
+
+const std::vector<Task>& TaskManager::GetTasks() const noexcept {
+    return tasks_;
+}
