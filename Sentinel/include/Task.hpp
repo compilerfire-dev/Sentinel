@@ -1,10 +1,12 @@
 #pragma once
 
 #include "DisplaySettings.hpp"
+#include "TimeFragment.hpp"
 
 #include <chrono>
 #include <optional>
 #include <string>
+#include <vector>
 
 class Task {
 public:
@@ -18,8 +20,11 @@ public:
     bool IsRunning() const noexcept;
     bool IsCompleted() const noexcept;
     std::chrono::seconds GetElapsedTime() const;
+    SystemClock::time_point GetCreatedTime() const noexcept;
     SystemClock::time_point GetCompletionTime() const noexcept;
+    std::string GetCreatedDateString() const;
     std::string GetCompletionDateString() const;
+    std::vector<SentinelShared::TimeFragment> GetTimeFragments() const;
 
     void Start();
     void Stop();
@@ -36,7 +41,9 @@ public:
         std::chrono::seconds elapsed,
         bool completed,
         bool running,
-        SystemClock::time_point completedAt
+        SystemClock::time_point createdAt,
+        SystemClock::time_point completedAt,
+        std::vector<SentinelShared::TimeFragment> fragments
     );
 
 private:
@@ -46,7 +53,9 @@ private:
     bool running_{false};
     bool completed_{false};
     SteadyClock::time_point startedAt_{};
+    SystemClock::time_point createdAt_{SystemClock::now()};
     SystemClock::time_point completedAt_{};
+    std::vector<SentinelShared::TimeFragment> timeFragments_;
     std::optional<RgbColor> foregroundColor_;
     std::optional<RgbColor> backgroundColor_;
 };
