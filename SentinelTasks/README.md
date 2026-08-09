@@ -38,6 +38,62 @@ setDescription opengl "Read the rendering chapter and implement the examples."
 manualSelect opengl
 ```
 
+## GUI-style command argument windows
+
+Commands that require arguments can be entered by name alone. Instead of producing a usage error, SentinelTasks opens a centered ncurses argument window with text-input fields and drop-lists.
+
+For example:
+
+```text
+> addTask
+```
+
+opens fields equivalent to:
+
+```text
+ID:      [ text input                         ]
+Parent:  [ drop-list: root / existing folders]
+Emoji:   [ drop-list: allowed emoji markers  ]
+Name:    [ text input                         ]
+
+                 [ Submit ]   [ Cancel ]
+```
+
+The forms are command-aware:
+
+- `addFolder` / `addTask`: ID text input, parent-folder drop-list, emoji drop-list, name text input.
+- `remove`: existing-node drop-list.
+- `setDescription`: existing-node drop-list and description text input.
+- `setEmoji`: existing-node drop-list and emoji drop-list.
+- `select`: existing-node drop-list.
+- `manualSelect`: existing-node drop-list, followed by normal manual-selection mode after submission.
+
+Drop-list values are rebuilt from the current tree when the window opens. Parent selection includes `root` plus existing folder IDs; node selections contain currently existing nodes; emoji selection uses the complete allowed marker pool.
+
+Inline CLI arguments still work exactly as before. For example, both of these are valid:
+
+```text
+addTask
+addTask opengl graphics 🔵 "Study OpenGL"
+```
+
+### Argument-window controls
+
+```text
+Tab / Shift-Tab   move between controls
+Left/Right        edit cursor in text fields / move between buttons
+Up/Down           choose items in a drop-list
+Enter / Space     open or accept a drop-list; activate buttons
+Enter             on a text field advances to the next control
+F2                submit the complete form immediately
+Esc               close an open drop-list, or cancel the argument window
+Mouse             focus fields, open/select drop-list values, submit/cancel
+Backspace         edit the focused text field
+Home / End        move inside the focused text field
+```
+
+The form submits by rebuilding the corresponding textual command and sending it through the same command parser used by normal CLI input.
+
 ## Manual selection
 
 Run:
@@ -46,7 +102,7 @@ Run:
 manualSelect
 ```
 
-Then use:
+This now opens the node-selection argument window first. Select a starting node and submit it, then use:
 
 ```text
 Up/Down    previous/next visible node
@@ -74,7 +130,7 @@ Use `emojis` inside the application to display them.
 
 ## Command-line controls
 
-Outside `manualSelect`:
+Outside `manualSelect` and the argument window:
 
 ```text
 Tab        accept command suggestion
