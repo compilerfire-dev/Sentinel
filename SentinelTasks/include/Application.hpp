@@ -3,8 +3,10 @@
 #include "TaskTree.hpp"
 
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class Application {
