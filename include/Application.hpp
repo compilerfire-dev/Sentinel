@@ -41,4 +41,5 @@ private:
     CommandProcessor commandProcessor_;
     std::string commandBuffer_;
     std::size_t selectedSuggestion_{0};
+    bool navigatingSuggestions_{false};
 };
