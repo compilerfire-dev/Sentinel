@@ -13,10 +13,7 @@ namespace {
 
 constexpr std::size_t MaxSuggestions = 6;
 constexpr short TaskColorPair = 1;
-constexpr short CustomForeground = 8;
-constexpr short CustomBackground = 9;
 constexpr short FirstPerTaskPair = 2;
-constexpr short FirstPerTaskColor = 10;
 
 struct CommandDefinition {
     std::string_view name;
@@ -89,6 +86,59 @@ short ToNcursesComponent(int value) {
     return static_cast<short>((value * 1000) / 255);
 }
 
+bool TryInitializeRgbColor(short slot, const RgbColor& color) {
+    if (!can_change_color() || slot < 0 || slot >= COLORS) return false;
+    return init_color(
+        slot,
+        ToNcursesComponent(color.red),
+        ToNcursesComponent(color.green),
+        ToNcursesComponent(color.blue)
+    ) != ERR;
+}
+
+bool TryInitializeRgbPair(
+    short pair,
+    const RgbColor& foregroundRgb,
+    const RgbColor& backgroundRgb,
+    short foregroundSlot,
+    short backgroundSlot
+) {
+    if (!has_colors() || pair <= 0 || pair >= COLOR_PAIRS) return false;
+    if (foregroundSlot == backgroundSlot) return false;
+
+    if (!TryInitializeRgbColor(foregroundSlot, foregroundRgb)) return false;
+    if (!TryInitializeRgbColor(backgroundSlot, backgroundRgb)) return false;
+
+    return init_pair(pair, foregroundSlot, backgroundSlot) != ERR;
+}
+
+bool CustomSlotsForVisibleTask(
+    std::size_t visibleSlot,
+    short& foregroundSlot,
+    short& backgroundSlot
+) {
+    if (COLORS < 16) return false;
+
+    // Allocate from the high end of the palette instead of overwriting low
+    // ANSI slots (8, 9, ...), which some terminals treat specially.
+    const long background = static_cast<long>(COLORS) - 1L - static_cast<long>(visibleSlot) * 2L;
+    const long foreground = background - 1L;
+
+    // Keep the standard 0-15 ANSI palette untouched.
+    if (foreground < 16 || background >= COLORS) return false;
+
+    foregroundSlot = static_cast<short>(foreground);
+    backgroundSlot = static_cast<short>(background);
+    return true;
+}
+
+bool DefaultCustomSlots(short& foregroundSlot, short& backgroundSlot) {
+    if (COLORS < 18) return false;
+    foregroundSlot = static_cast<short>(COLORS - 2);
+    backgroundSlot = static_cast<short>(COLORS - 1);
+    return foregroundSlot >= 16;
+}
+
 } // namespace
 
 Application::Application()
@@ -141,20 +191,26 @@ void Application::ApplyColors() {
     short foreground = NearestBasicColor(displaySettings_.foreground);
     short background = NearestBasicColor(displaySettings_.background);
 
-    if (can_change_color() && COLORS > CustomBackground) {
-        init_color(CustomForeground,
-            ToNcursesComponent(displaySettings_.foreground.red),
-            ToNcursesComponent(displaySettings_.foreground.green),
-            ToNcursesComponent(displaySettings_.foreground.blue));
-        init_color(CustomBackground,
-            ToNcursesComponent(displaySettings_.background.red),
-            ToNcursesComponent(displaySettings_.background.green),
-            ToNcursesComponent(displaySettings_.background.blue));
-        foreground = CustomForeground;
-        background = CustomBackground;
+    short foregroundSlot = 0;
+    short backgroundSlot = 0;
+    bool customPairInitialized = false;
+
+    if (DefaultCustomSlots(foregroundSlot, backgroundSlot)) {
+        customPairInitialized = TryInitializeRgbPair(
+            TaskColorPair,
+            displaySettings_.foreground,
+            displaySettings_.background,
+            foregroundSlot,
+            backgroundSlot
+        );
     }
 
-    init_pair(TaskColorPair, foreground, background);
+    if (!customPairInitialized) {
+        if (init_pair(TaskColorPair, foreground, background) == ERR) {
+            persistenceStatus_ = "Terminal could not initialize the default task color pair.";
+        }
+    }
+
     bkgd(A_NORMAL);
     attrset(A_NORMAL);
 }
@@ -441,24 +497,31 @@ void Application::RenderTasks() {
             short foreground = NearestBasicColor(foregroundRgb);
             short background = NearestBasicColor(backgroundRgb);
             const short candidatePair = static_cast<short>(FirstPerTaskPair + visibleSlot);
-            const short foregroundSlot = static_cast<short>(FirstPerTaskColor + visibleSlot * 2);
-            const short backgroundSlot = static_cast<short>(foregroundSlot + 1);
 
             if (candidatePair < COLOR_PAIRS) {
-                if (can_change_color() && backgroundSlot < COLORS) {
-                    init_color(foregroundSlot,
-                        ToNcursesComponent(foregroundRgb.red),
-                        ToNcursesComponent(foregroundRgb.green),
-                        ToNcursesComponent(foregroundRgb.blue));
-                    init_color(backgroundSlot,
-                        ToNcursesComponent(backgroundRgb.red),
-                        ToNcursesComponent(backgroundRgb.green),
-                        ToNcursesComponent(backgroundRgb.blue));
-                    foreground = foregroundSlot;
-                    background = backgroundSlot;
+                short foregroundSlot = 0;
+                short backgroundSlot = 0;
+                bool customPairInitialized = false;
+
+                // visibleSlot + 1 reserves the highest two slots for the
+                // default pair created in ApplyColors().
+                if (CustomSlotsForVisibleTask(visibleSlot + 1, foregroundSlot, backgroundSlot)) {
+                    customPairInitialized = TryInitializeRgbPair(
+                        candidatePair,
+                        foregroundRgb,
+                        backgroundRgb,
+                        foregroundSlot,
+                        backgroundSlot
+                    );
                 }
-                init_pair(candidatePair, foreground, background);
-                pair = candidatePair;
+
+                if (!customPairInitialized) {
+                    if (init_pair(candidatePair, foreground, background) != ERR) {
+                        pair = candidatePair;
+                    }
+                } else {
+                    pair = candidatePair;
+                }
             }
         }
 
