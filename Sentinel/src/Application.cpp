@@ -17,10 +17,13 @@ namespace {
 constexpr std::size_t MaxSuggestions = 6;
 constexpr short ScreenColorPair = 1;
 constexpr short TaskColorPair = 2;
-constexpr short FirstPerTaskPair = 3;
+constexpr short RunningTaskPair = 3;
+constexpr short FirstPerTaskPair = 4;
 
 constexpr RgbColor ScreenForeground{255, 255, 255};
 constexpr RgbColor ScreenBackground{0, 0, 0};
+constexpr RgbColor RunningForeground{0, 0, 0};
+constexpr RgbColor RunningBackground{255, 255, 255};
 
 struct CommandDefinition {
     std::string_view name;
@@ -271,6 +274,11 @@ void Application::ApplyColors() {
         displaySettings_.foreground,
         displaySettings_.background
     );
+    const bool runningPairReady = InitializeColorPair(
+        RunningTaskPair,
+        RunningForeground,
+        RunningBackground
+    );
 
     if (!screenPairReady) {
         persistenceStatus_ = "Terminal could not initialize the Sentinel screen color pair.";
@@ -278,6 +286,8 @@ void Application::ApplyColors() {
     }
     if (!taskPairReady) {
         persistenceStatus_ = "Terminal could not initialize the default task color pair.";
+    } else if (!runningPairReady) {
+        persistenceStatus_ = "Terminal could not initialize the running-task highlight.";
     }
 
     wbkgd(stdscr, COLOR_PAIR(ScreenColorPair));
@@ -907,7 +917,7 @@ void Application::RenderTasks() {
 
         const char* state = task->IsCompleted()
             ? "[x]"
-            : task->IsRunning() ? "[>]" : "[ ]";
+            : task->IsRunning() ? "   " : "[ ]";
         const std::string idField = task->GetId() + " " + state;
         const std::string nameField = task->GetName();
         const std::string timeField =
@@ -931,8 +941,8 @@ void Application::RenderTasks() {
         );
         const int actualTimeWidth = std::max(0, rightEdge - actualTimeColumn);
 
-        short pair = TaskColorPair;
-        if (has_colors() && task->HasCustomColor()) {
+        short pair = task->IsRunning() ? RunningTaskPair : TaskColorPair;
+        if (!task->IsRunning() && has_colors() && task->HasCustomColor()) {
             const short candidate = static_cast<short>(FirstPerTaskPair + slot);
             if (candidate > 0 && candidate < COLOR_PAIRS &&
                 InitializeColorPair(
@@ -945,7 +955,7 @@ void Application::RenderTasks() {
         }
 
         if (has_colors()) attr_set(A_NORMAL, pair, nullptr);
-        else attr_set(A_NORMAL, 0, nullptr);
+        else attr_set(task->IsRunning() ? A_REVERSE : A_NORMAL, 0, nullptr);
         move(row, 0);
         clrtoeol();
         DrawClippedField(row, 0, idWidth, idField);
