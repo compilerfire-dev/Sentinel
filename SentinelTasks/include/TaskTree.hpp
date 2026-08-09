@@ -2,6 +2,7 @@
 
 #include "Color.hpp"
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -13,6 +14,8 @@ enum class NodeKind {
 };
 
 struct TaskNode {
+    using Clock = std::chrono::steady_clock;
+
     std::string id;
     std::string name;
     std::string description;
@@ -21,6 +24,19 @@ struct TaskNode {
     std::vector<std::string> children;
     std::optional<RgbColor> foregroundColor;
     std::optional<RgbColor> backgroundColor;
+
+    std::chrono::seconds accumulatedTime{0};
+    bool running{false};
+    bool completed{false};
+    Clock::time_point startedAt{};
+    std::chrono::system_clock::time_point completedAt{};
+
+    void Start();
+    void Stop();
+    void Complete();
+    std::chrono::seconds Elapsed() const;
+    std::string ElapsedString() const;
+    std::string CompletionString() const;
 };
 
 struct VisibleTreeNode {
@@ -43,6 +59,10 @@ public:
     bool SetDescription(const std::string& id, std::string description, std::string& errorMessage);
     bool SetColor(const std::string& id, RgbColor foreground, RgbColor background, std::string& errorMessage);
     void ClearColor(const std::string& id);
+
+    bool StartTask(const std::string& id, std::string& errorMessage);
+    bool StopTask(const std::string& id, std::string& errorMessage);
+    bool CompleteTask(const std::string& id, std::string& errorMessage);
 
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
