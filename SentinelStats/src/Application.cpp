@@ -193,7 +193,14 @@ int Application::Run(int argc, char** argv) {
         G_APPLICATION_FLAGS_NONE
     );
     g_signal_connect(app, "activate", G_CALLBACK(OnActivate), this);
-    const int result = g_application_run(G_APPLICATION(app), argc, argv);
+
+    // SentinelStats consumes the optional JSON path itself. Passing that path
+    // to g_application_run() would make GApplication interpret it as a file
+    // open request, which requires G_APPLICATION_HANDLES_OPEN and an "open"
+    // signal handler. Run GTK with only argv[0] instead.
+    char* gtkArgv[] = { (argc > 0 && argv && argv[0]) ? argv[0] : const_cast<char*>("SentinelStats"), nullptr };
+    const int result = g_application_run(G_APPLICATION(app), 1, gtkArgv);
+
     g_object_unref(app);
     return result;
 }
