@@ -11,6 +11,7 @@ target_include_directories(SentinelStats PRIVATE
 
 target_link_libraries(SentinelStats PRIVATE
     PkgConfig::GTK3
+    SentinelShared
 )
 
 target_compile_options(SentinelStats PRIVATE
