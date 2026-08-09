@@ -1,5 +1,6 @@
 #include "Application.hpp"
 #include "FuzzySearch.hpp"
+#include "NativeFileDialog.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,8 +15,6 @@
 namespace {
 
 constexpr std::size_t MaxSuggestions = 6;
-
-// Keep the application background independent from configurable task-row colors.
 constexpr short ScreenColorPair = 1;
 constexpr short TaskColorPair = 2;
 constexpr short FirstPerTaskPair = 3;
@@ -44,7 +43,7 @@ constexpr std::array<CommandDefinition, 13> Commands{{
     {"search", "fuzzy-search tasks"},
     {"list", "show all tasks"},
     {"commands", "show all commands"},
-    {"setJsonFile", "switch active JSON data file"},
+    {"setJsonFile", "choose/switch active JSON data file"},
     {"defineColor", "define a named RGB color"},
     {"color", "set default or per-task color"},
     {"help", "show command help"},
@@ -135,13 +134,11 @@ short NearestBasicColor(const RgbColor& color) {
         const long green = color.green - candidate.green;
         const long blue = color.blue - candidate.blue;
         const long distance = red * red + green * green + blue * blue;
-
         if (distance < bestDistance) {
             bestDistance = distance;
             best = candidate.ncursesColor;
         }
     }
-
     return best;
 }
 
@@ -152,7 +149,6 @@ short NearestTerminalColor(const RgbColor& color) {
         COLORS,
         static_cast<int>(std::numeric_limits<short>::max()) + 1
     );
-
     long bestDistance = std::numeric_limits<long>::max();
     short best = NearestBasicColor(color);
     bool found = false;
@@ -161,10 +157,7 @@ short NearestTerminalColor(const RgbColor& color) {
         short red = 0;
         short green = 0;
         short blue = 0;
-
-        if (color_content(static_cast<short>(index), &red, &green, &blue) == ERR) {
-            continue;
-        }
+        if (color_content(static_cast<short>(index), &red, &green, &blue) == ERR) continue;
 
         const long redDistance = color.red - red * 255 / 1000;
         const long greenDistance = color.green - green * 255 / 1000;
@@ -180,7 +173,6 @@ short NearestTerminalColor(const RgbColor& color) {
             best = static_cast<short>(index);
         }
     }
-
     return best;
 }
 
@@ -190,7 +182,6 @@ bool InitializeColorPair(
     const RgbColor& background
 ) {
     if (!has_colors() || pair <= 0 || pair >= COLOR_PAIRS) return false;
-
     return init_pair(
         pair,
         NearestTerminalColor(foreground),
@@ -275,7 +266,6 @@ void Application::ApplyColors() {
         ScreenForeground,
         ScreenBackground
     );
-
     const bool taskPairReady = InitializeColorPair(
         TaskColorPair,
         displaySettings_.foreground,
@@ -286,31 +276,43 @@ void Application::ApplyColors() {
         persistenceStatus_ = "Terminal could not initialize the Sentinel screen color pair.";
         return;
     }
-
     if (!taskPairReady) {
         persistenceStatus_ = "Terminal could not initialize the default task color pair.";
     }
 
-    // This is the important part: the stdscr background itself is now a real
-    // white-on-black color pair. erase()/clear() therefore create black cells,
-    // rather than pair-0/default-background cells.
     wbkgd(stdscr, COLOR_PAIR(ScreenColorPair));
     wattr_set(stdscr, A_NORMAL, ScreenColorPair, nullptr);
-
-    // Force an immediate physical repaint after changing the window background.
     werase(stdscr);
     touchwin(stdscr);
     wnoutrefresh(stdscr);
     doupdate();
 }
 
+void Application::OpenNativeJsonFilePicker() {
+    curs_set(0);
+    const auto selected = SentinelShared::SelectJsonFile(taskManager_.GetJsonFile());
+
+    if (selected) {
+        const std::string command =
+            "setJsonFile " + QuoteArgument(selected->string());
+        commandProcessor_.Execute(command);
+        AddCommandToHistory(command);
+        persistenceStatus_.clear();
+    } else {
+        persistenceStatus_ = "JSON file selection cancelled or unavailable.";
+    }
+
+    clearok(stdscr, TRUE);
+    touchwin(stdscr);
+    refresh();
+    curs_set(1);
+}
+
 void Application::AddCommandToHistory(const std::string& command) {
     if (command.empty()) return;
-
     if (commandHistory_.empty() || commandHistory_.back() != command) {
         commandHistory_.push_back(command);
     }
-
     ResetHistoryNavigation();
 }
 
@@ -356,9 +358,7 @@ void Application::HandleInput() {
     if (commandDialog_) {
         if (key == KEY_MOUSE) {
             MEVENT event{};
-            if (getmouse(&event) == OK) {
-                HandleCommandDialogMouse(event.x, event.y);
-            }
+            if (getmouse(&event) == OK) HandleCommandDialogMouse(event.x, event.y);
         } else {
             HandleCommandDialogInput(key);
         }
@@ -371,27 +371,23 @@ void Application::HandleInput() {
         HandleMouse();
         return;
     }
-
     if (key == '\t') {
         AcceptSuggestion(suggestions);
         ResetHistoryNavigation();
         return;
     }
-
     if (key == KEY_LEFT) {
         if (cursorPosition_ > 0) --cursorPosition_;
         ResetHistoryNavigation();
         ResetSuggestionSelection();
         return;
     }
-
     if (key == KEY_RIGHT) {
         if (cursorPosition_ < commandBuffer_.size()) ++cursorPosition_;
         ResetHistoryNavigation();
         ResetSuggestionSelection();
         return;
     }
-
     if (key == KEY_UP) {
         if (navigatingSuggestions_ && !suggestions.empty()) {
             selectedSuggestion_ = selectedSuggestion_ == 0
@@ -402,7 +398,6 @@ void Application::HandleInput() {
         }
         return;
     }
-
     if (key == KEY_DOWN) {
         if (navigatingSuggestions_ && !suggestions.empty()) {
             selectedSuggestion_ = (selectedSuggestion_ + 1) % suggestions.size();
@@ -424,6 +419,16 @@ void Application::HandleInput() {
         const std::string executed = Trim(commandBuffer_);
         const auto separator = executed.find_first_of(" \t");
         const std::string command = executed.substr(0, separator);
+
+        if (!executed.empty() && separator == std::string::npos &&
+            command == "setJsonFile") {
+            AddCommandToHistory(command);
+            commandBuffer_.clear();
+            cursorPosition_ = 0;
+            ResetSuggestionSelection();
+            OpenNativeJsonFilePicker();
+            return;
+        }
 
         if (!executed.empty() && separator == std::string::npos &&
             OpenCommandDialog(command)) {
@@ -466,11 +471,8 @@ void Application::HandleInput() {
 void Application::HandleMouse() {
     MEVENT event{};
     if (getmouse(&event) != OK) return;
-
     if ((event.bstate & BUTTON1_CLICKED) == 0 &&
-        (event.bstate & BUTTON1_PRESSED) == 0) {
-        return;
-    }
+        (event.bstate & BUTTON1_PRESSED) == 0) return;
 
     int height = 0;
     int width = 0;
@@ -489,7 +491,6 @@ void Application::HandleMouse() {
 
     const auto suggestions = BuildSuggestions();
     if (suggestions.empty()) return;
-
     const int start = SuggestionStartRow(suggestions.size());
     if (event.y >= start &&
         event.y < start + static_cast<int>(suggestions.size())) {
@@ -504,11 +505,7 @@ void Application::AcceptSuggestion(
     const std::vector<Suggestion>& suggestions
 ) {
     if (suggestions.empty()) return;
-
-    selectedSuggestion_ = std::min(
-        selectedSuggestion_,
-        suggestions.size() - 1
-    );
+    selectedSuggestion_ = std::min(selectedSuggestion_, suggestions.size() - 1);
     commandBuffer_ = suggestions[selectedSuggestion_].replacement;
     cursorPosition_ = commandBuffer_.size();
     ResetSuggestionSelection();
@@ -541,12 +538,9 @@ bool Application::OpenCommandDialog(const std::string& command) {
         field.label = std::move(label);
         field.kind = DialogFieldKind::DropList;
         field.options = std::move(options);
-
         if (!field.options.empty()) {
             const auto iterator = std::find(
-                field.options.begin(),
-                field.options.end(),
-                preferred
+                field.options.begin(), field.options.end(), preferred
             );
             field.selectedOption = iterator == field.options.end()
                 ? 0
@@ -568,8 +562,6 @@ bool Application::OpenCommandDialog(const std::string& command) {
         dialog.fields.push_back(drop("Task", TaskIdOptions()));
     } else if (command == "search") {
         dialog.fields.push_back(text("Query"));
-    } else if (command == "setJsonFile") {
-        dialog.fields.push_back(text("JSON path", taskManager_.GetJsonFile()));
     } else if (command == "defineColor") {
         dialog.fields.push_back(text("Color name"));
         dialog.fields.push_back(text("RGB", "rgb(255,255,255)"));
@@ -595,24 +587,20 @@ void Application::CloseCommandDialog() {
 
 void Application::HandleCommandDialogInput(int key) {
     if (!commandDialog_) return;
-
     auto& dialog = *commandDialog_;
 
     if (key == 27) {
         CloseCommandDialog();
         return;
     }
-
     if (key == KEY_F(2)) {
         SubmitCommandDialog();
         return;
     }
-
     if (key == '\t') {
         MoveDialogFocus(1);
         return;
     }
-
 #ifdef KEY_BTAB
     if (key == KEY_BTAB) {
         MoveDialogFocus(-1);
@@ -624,38 +612,28 @@ void Application::HandleCommandDialogInput(int key) {
     const std::size_t cancel = submit + 1;
 
     if (dialog.focusedControl == submit) {
-        if (key == '\n' || key == KEY_ENTER || key == ' ') {
-            SubmitCommandDialog();
-        }
+        if (key == '\n' || key == KEY_ENTER || key == ' ') SubmitCommandDialog();
         return;
     }
-
     if (dialog.focusedControl == cancel) {
-        if (key == '\n' || key == KEY_ENTER || key == ' ') {
-            CloseCommandDialog();
-        }
+        if (key == '\n' || key == KEY_ENTER || key == ' ') CloseCommandDialog();
         return;
     }
-
     if (dialog.focusedControl >= dialog.fields.size()) return;
 
     auto& field = dialog.fields[dialog.focusedControl];
-
     if (field.kind == DialogFieldKind::DropList) {
         if (field.options.empty()) return;
-
         if (key == KEY_UP) {
             field.selectedOption = field.selectedOption == 0
                 ? field.options.size() - 1
                 : field.selectedOption - 1;
         } else if (key == KEY_DOWN) {
-            field.selectedOption =
-                (field.selectedOption + 1) % field.options.size();
+            field.selectedOption = (field.selectedOption + 1) % field.options.size();
         } else if (key == '\n' || key == KEY_ENTER) {
             MoveDialogFocus(1);
             return;
         }
-
         field.value = field.options[field.selectedOption];
         return;
     }
@@ -682,7 +660,6 @@ void Application::HandleCommandDialogInput(int key) {
 
 void Application::HandleCommandDialogMouse(int mouseX, int mouseY) {
     if (!commandDialog_) return;
-
     auto& dialog = *commandDialog_;
     const auto rect = CalculateDialogRect(dialog.fields.size());
     const int labelWidth = std::min(18, std::max(10, rect.width / 4));
@@ -691,8 +668,7 @@ void Application::HandleCommandDialogMouse(int mouseX, int mouseY) {
 
     for (std::size_t index = 0; index < dialog.fields.size(); ++index) {
         if (mouseY == DialogFieldRow(rect, index) &&
-            mouseX >= inputColumn &&
-            mouseX < inputColumn + inputWidth) {
+            mouseX >= inputColumn && mouseX < inputColumn + inputWidth) {
             dialog.focusedControl = index;
             return;
         }
@@ -701,7 +677,6 @@ void Application::HandleCommandDialogMouse(int mouseX, int mouseY) {
     const int buttonRow = rect.top + rect.height - 3;
     const int submitColumn = rect.left + rect.width / 2 - 14;
     const int cancelColumn = rect.left + rect.width / 2 + 3;
-
     if (mouseY == buttonRow && mouseX >= submitColumn &&
         mouseX < submitColumn + 12) {
         SubmitCommandDialog();
@@ -713,10 +688,8 @@ void Application::HandleCommandDialogMouse(int mouseX, int mouseY) {
 
 void Application::MoveDialogFocus(int delta) {
     if (!commandDialog_) return;
-
     auto& dialog = *commandDialog_;
     const std::size_t count = dialog.fields.size() + 2;
-
     dialog.focusedControl = delta < 0
         ? (dialog.focusedControl == 0 ? count - 1 : dialog.focusedControl - 1)
         : (dialog.focusedControl + 1) % count;
@@ -724,7 +697,6 @@ void Application::MoveDialogFocus(int delta) {
 
 bool Application::SubmitCommandDialog() {
     if (!commandDialog_) return false;
-
     for (const auto& field : commandDialog_->fields) {
         if (field.value.empty()) {
             commandDialog_->validationMessage =
@@ -745,19 +717,16 @@ bool Application::SubmitCommandDialog() {
 
 std::string Application::BuildDialogCommand() const {
     if (!commandDialog_) return {};
-
     const auto& dialog = *commandDialog_;
 
     if (dialog.command == "color" && dialog.fields.size() == 3) {
         const auto& target = dialog.fields[0].value;
         const auto& foreground = dialog.fields[1].value;
         const auto& background = dialog.fields[2].value;
-
         if (target == "default") {
             return "color " + QuoteArgument(foreground) +
                    " bg " + QuoteArgument(background);
         }
-
         return "color " + QuoteArgument(target) + " " +
                QuoteArgument(foreground) + " bg " +
                QuoteArgument(background);
@@ -772,9 +741,7 @@ std::string Application::BuildDialogCommand() const {
 
 std::vector<std::string> Application::TaskIdOptions() const {
     std::vector<std::string> result;
-    for (const auto& task : taskManager_.GetTasks()) {
-        result.push_back(task.GetId());
-    }
+    for (const auto& task : taskManager_.GetTasks()) result.push_back(task.GetId());
     return result;
 }
 
@@ -784,12 +751,10 @@ std::vector<std::string> Application::ColorNameOptions() const {
         "white", "brightBlack", "brightRed", "brightGreen", "brightYellow",
         "brightBlue", "brightMagenta", "brightCyan", "brightWhite"
     };
-
     for (const auto& [name, color] : taskManager_.GetDefinedColors()) {
         (void)color;
         result.push_back(name);
     }
-
     std::sort(result.begin(), result.end());
     result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
@@ -807,7 +772,6 @@ void Application::Render() {
     const auto suggestions = commandDialog_
         ? std::vector<Suggestion>{}
         : BuildSuggestions();
-
     if (!suggestions.empty() && selectedSuggestion_ >= suggestions.size()) {
         selectedSuggestion_ = 0;
     }
@@ -818,13 +782,11 @@ void Application::Render() {
     RenderStatus();
     RenderCommandLine();
     if (commandDialog_) RenderCommandDialog();
-
     refresh();
 }
 
 void Application::RenderHeader() {
     SetNormalUiAttributes();
-
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
@@ -833,7 +795,6 @@ void Application::RenderHeader() {
     const std::string title = commandDialog_
         ? "Sentinel - Productivity Tracker | COMMAND ARGUMENT WINDOW"
         : "Sentinel - Productivity Tracker | " + taskManager_.GetJsonFile();
-
     mvaddnstr(0, 0, title.c_str(), std::max(0, width - 1));
     if (width > 1) mvhline(1, 0, ACS_HLINE, width - 1);
 }
@@ -844,29 +805,24 @@ std::vector<Application::Suggestion> Application::BuildSuggestions() const {
 
     const auto separator = commandBuffer_.find_first_of(" \t");
     const std::string command = commandBuffer_.substr(0, separator);
-
     if (separator == std::string::npos) {
         struct RankedCommand {
             int score;
             CommandDefinition definition;
         };
-
         std::vector<RankedCommand> ranked;
         for (const auto& definition : Commands) {
             const auto score = FuzzySearch::Score(command, definition.name);
             if (score) ranked.push_back({*score, definition});
         }
-
         std::sort(
-            ranked.begin(),
-            ranked.end(),
+            ranked.begin(), ranked.end(),
             [](const auto& left, const auto& right) {
                 return left.score != right.score
                     ? left.score > right.score
                     : left.definition.name < right.definition.name;
             }
         );
-
         for (std::size_t index = 0;
              index < ranked.size() && index < MaxSuggestions;
              ++index) {
@@ -876,21 +832,14 @@ std::vector<Application::Suggestion> Application::BuildSuggestions() const {
                 std::string(ranked[index].definition.name) + " "
             });
         }
-
         return suggestions;
     }
 
     if (!TakesTaskArgument(command)) return suggestions;
-
-    const std::string query = UnquotePartial(
-        commandBuffer_.substr(separator + 1)
-    );
-
+    const std::string query = UnquotePartial(commandBuffer_.substr(separator + 1));
     std::vector<std::size_t> indices;
     if (query.empty()) {
-        for (std::size_t index = 0;
-             index < taskManager_.GetTasks().size();
-             ++index) {
+        for (std::size_t index = 0; index < taskManager_.GetTasks().size(); ++index) {
             indices.push_back(index);
         }
     } else {
@@ -899,33 +848,24 @@ std::vector<Application::Suggestion> Application::BuildSuggestions() const {
 
     for (const auto index : indices) {
         if (suggestions.size() >= MaxSuggestions) break;
-
         const Task* task = taskManager_.GetTask(index);
         if (!task) continue;
-
         std::ostringstream label;
         label << task->GetId() << "  -  " << task->GetName();
         if (task->IsCompleted()) label << "  [completed]";
         else if (task->IsRunning()) label << "  [running]";
-
         suggestions.push_back({
             label.str(),
             command + " " + QuoteIfNeeded(task->GetId())
         });
     }
-
     return suggestions;
 }
 
 std::vector<std::size_t> Application::VisibleTaskIndices() const {
-    if (commandProcessor_.GetSearchResults()) {
-        return *commandProcessor_.GetSearchResults();
-    }
-
+    if (commandProcessor_.GetSearchResults()) return *commandProcessor_.GetSearchResults();
     std::vector<std::size_t> result;
-    for (std::size_t index = 0;
-         index < taskManager_.GetTasks().size();
-         ++index) {
+    for (std::size_t index = 0; index < taskManager_.GetTasks().size(); ++index) {
         result.push_back(index);
     }
     return result;
@@ -936,7 +876,6 @@ int Application::SuggestionStartRow(std::size_t count) const {
     int width = 0;
     getmaxyx(stdscr, height, width);
     (void)width;
-
     return std::max(2, height - 2 - static_cast<int>(count));
 }
 
@@ -963,14 +902,12 @@ void Application::RenderTasks() {
     std::size_t slot = 0;
     for (const auto index : VisibleTaskIndices()) {
         if (row >= lastRow) break;
-
         const Task* task = taskManager_.GetTask(index);
         if (!task) continue;
 
         const char* state = task->IsCompleted()
             ? "[x]"
             : task->IsRunning() ? "[>]" : "[ ]";
-
         const std::string idField = task->GetId() + " " + state;
         const std::string nameField = task->GetName();
         const std::string timeField =
@@ -978,11 +915,7 @@ void Application::RenderTasks() {
             task->GetCompletionDateString();
 
         const int rightEdge = std::max(0, width - 1);
-        const int nameColumn = std::clamp(
-            width / 4,
-            8,
-            std::max(8, rightEdge)
-        );
+        const int nameColumn = std::clamp(width / 4, 8, std::max(8, rightEdge));
         const int timeWidth = static_cast<int>(timeField.size());
         const int desiredTimeColumn = rightEdge - timeWidth;
         const int minimumTimeColumn = nameColumn + 8;
@@ -990,26 +923,17 @@ void Application::RenderTasks() {
         const int idWidth = std::max(0, nameColumn - 2);
         const int nameWidth = std::max(
             0,
-            std::min(
-                timeColumn - nameColumn - 2,
-                rightEdge - nameColumn
-            )
+            std::min(timeColumn - nameColumn - 2, rightEdge - nameColumn)
         );
         const int actualTimeColumn = std::min(
             timeColumn,
             std::max(0, rightEdge - timeWidth)
         );
-        const int actualTimeWidth = std::max(
-            0,
-            rightEdge - actualTimeColumn
-        );
+        const int actualTimeWidth = std::max(0, rightEdge - actualTimeColumn);
 
         short pair = TaskColorPair;
         if (has_colors() && task->HasCustomColor()) {
-            const short candidate = static_cast<short>(
-                FirstPerTaskPair + slot
-            );
-
+            const short candidate = static_cast<short>(FirstPerTaskPair + slot);
             if (candidate > 0 && candidate < COLOR_PAIRS &&
                 InitializeColorPair(
                     candidate,
@@ -1022,23 +946,15 @@ void Application::RenderTasks() {
 
         if (has_colors()) attr_set(A_NORMAL, pair, nullptr);
         else attr_set(A_NORMAL, 0, nullptr);
-
         move(row, 0);
         clrtoeol();
         DrawClippedField(row, 0, idWidth, idField);
         DrawClippedField(row, nameColumn, nameWidth, nameField);
-        DrawClippedField(
-            row,
-            actualTimeColumn,
-            actualTimeWidth,
-            timeField
-        );
-
+        DrawClippedField(row, actualTimeColumn, actualTimeWidth, timeField);
         ++row;
         SetNormalUiAttributes();
         ++slot;
     }
-
     SetNormalUiAttributes();
 }
 
@@ -1046,49 +962,41 @@ void Application::RenderSuggestions(
     const std::vector<Suggestion>& suggestions
 ) {
     if (suggestions.empty()) return;
-
     SetNormalUiAttributes();
 
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
     (void)height;
-
     const int start = SuggestionStartRow(suggestions.size());
 
     for (std::size_t index = 0; index < suggestions.size(); ++index) {
         const bool selected = index == selectedSuggestion_;
         if (selected) attron(A_REVERSE);
-
         const std::string line =
             (selected ? "> " : "  ") + suggestions[index].label;
-
         mvaddnstr(
             start + static_cast<int>(index),
             0,
             line.c_str(),
             std::max(0, width - 1)
         );
-
         if (selected) attroff(A_REVERSE);
     }
 }
 
 void Application::RenderStatus() {
     SetNormalUiAttributes();
-
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
     if (height < 2) return;
 
     std::string status = commandProcessor_.GetStatusMessage();
-
     if (!persistenceStatus_.empty()) {
         status += status.empty() ? "" : " | ";
         status += persistenceStatus_;
     }
-
     if (commandDialog_) {
         status += status.empty() ? "" : " | ";
         status += "Tab next | Shift+Tab previous | Enter choose | F2 submit | Esc cancel";
@@ -1099,18 +1007,11 @@ void Application::RenderStatus() {
         status += status.empty() ? "" : " | ";
         status += "Up: previous command | Left/Right: cursor";
     }
-
-    mvaddnstr(
-        height - 2,
-        0,
-        status.c_str(),
-        std::max(0, width - 1)
-    );
+    mvaddnstr(height - 2, 0, status.c_str(), std::max(0, width - 1));
 }
 
 void Application::RenderCommandLine() {
     SetNormalUiAttributes();
-
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
@@ -1119,7 +1020,6 @@ void Application::RenderCommandLine() {
     const int row = height - 1;
     move(row, 0);
     clrtoeol();
-
     if (commandDialog_) {
         curs_set(0);
         const std::string line =
@@ -1130,58 +1030,31 @@ void Application::RenderCommandLine() {
 
     curs_set(1);
     mvaddnstr(row, 0, "> ", std::max(0, width - 1));
-    if (width > 2) {
-        mvaddnstr(row, 2, commandBuffer_.c_str(), width - 3);
-    }
-
-    move(
-        row,
-        std::min(width - 1, static_cast<int>(cursorPosition_) + 2)
-    );
+    if (width > 2) mvaddnstr(row, 2, commandBuffer_.c_str(), width - 3);
+    move(row, std::min(width - 1, static_cast<int>(cursorPosition_) + 2));
 }
 
 void Application::RenderCommandDialog() {
     if (!commandDialog_) return;
-
     SetNormalUiAttributes();
 
     auto& dialog = *commandDialog_;
     const auto rect = CalculateDialogRect(dialog.fields.size());
-
     for (int y = rect.top; y < rect.top + rect.height; ++y) {
         move(y, rect.left);
         for (int x = 0; x < rect.width; ++x) addch(' ');
     }
 
     mvhline(rect.top, rect.left + 1, ACS_HLINE, rect.width - 2);
-    mvhline(
-        rect.top + rect.height - 1,
-        rect.left + 1,
-        ACS_HLINE,
-        rect.width - 2
-    );
+    mvhline(rect.top + rect.height - 1, rect.left + 1, ACS_HLINE, rect.width - 2);
     mvvline(rect.top + 1, rect.left, ACS_VLINE, rect.height - 2);
-    mvvline(
-        rect.top + 1,
-        rect.left + rect.width - 1,
-        ACS_VLINE,
-        rect.height - 2
-    );
+    mvvline(rect.top + 1, rect.left + rect.width - 1, ACS_VLINE, rect.height - 2);
     mvaddch(rect.top, rect.left, ACS_ULCORNER);
     mvaddch(rect.top, rect.left + rect.width - 1, ACS_URCORNER);
     mvaddch(rect.top + rect.height - 1, rect.left, ACS_LLCORNER);
-    mvaddch(
-        rect.top + rect.height - 1,
-        rect.left + rect.width - 1,
-        ACS_LRCORNER
-    );
+    mvaddch(rect.top + rect.height - 1, rect.left + rect.width - 1, ACS_LRCORNER);
 
-    DrawClippedField(
-        rect.top + 1,
-        rect.left + 3,
-        rect.width - 6,
-        dialog.title
-    );
+    DrawClippedField(rect.top + 1, rect.left + 3, rect.width - 6, dialog.title);
     DrawClippedField(
         rect.top + 2,
         rect.left + 3,
@@ -1196,21 +1069,12 @@ void Application::RenderCommandDialog() {
     for (std::size_t index = 0; index < dialog.fields.size(); ++index) {
         auto& field = dialog.fields[index];
         const int row = DialogFieldRow(rect, index);
-
-        DrawClippedField(
-            row,
-            rect.left + 3,
-            labelWidth - 1,
-            field.label + ":"
-        );
-
+        DrawClippedField(row, rect.left + 3, labelWidth - 1, field.label + ":");
         if (dialog.focusedControl == index) attron(A_REVERSE);
-
         const std::string value =
             field.value.empty() && field.kind == DialogFieldKind::DropList
                 ? "(no options)"
                 : field.value;
-
         DrawClippedField(
             row,
             inputColumn,
@@ -1219,7 +1083,6 @@ void Application::RenderCommandDialog() {
                 (field.kind == DialogFieldKind::DropList ? "  v" : "") +
                 " ]"
         );
-
         if (dialog.focusedControl == index) attroff(A_REVERSE);
     }
 
@@ -1232,7 +1095,6 @@ void Application::RenderCommandDialog() {
     if (dialog.focusedControl == submit) attron(A_REVERSE);
     DrawClippedField(buttonRow, submitColumn, 12, "[ Submit ]");
     if (dialog.focusedControl == submit) attroff(A_REVERSE);
-
     if (dialog.focusedControl == cancel) attron(A_REVERSE);
     DrawClippedField(buttonRow, cancelColumn, 12, "[ Cancel ]");
     if (dialog.focusedControl == cancel) attroff(A_REVERSE);
