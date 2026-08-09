@@ -41,6 +41,13 @@ void TaskNode::Complete() {
     completedAt = std::chrono::system_clock::now();
 }
 
+void TaskNode::Unset() {
+    if (kind != NodeKind::Task || !completed) return;
+    completed = false;
+    running = false;
+    completedAt = std::chrono::system_clock::time_point{};
+}
+
 std::chrono::seconds TaskNode::Elapsed() const {
     if (kind != NodeKind::Task) return std::chrono::seconds{0};
     if (!running) return accumulatedTime;
@@ -169,7 +176,7 @@ bool TaskTree::StartTask(const std::string& id, std::string& errorMessage) {
     TaskNode* node = GetNode(id);
     if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
     if (node->kind != NodeKind::Task) { errorMessage = "Timers can only be started on task nodes."; return false; }
-    if (node->completed) { errorMessage = "Completed tasks cannot be restarted."; return false; }
+    if (node->completed) { errorMessage = "Completed tasks cannot be restarted. Use unset first."; return false; }
     node->Start();
     errorMessage.clear();
     return true;
@@ -189,6 +196,16 @@ bool TaskTree::CompleteTask(const std::string& id, std::string& errorMessage) {
     if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
     if (node->kind != NodeKind::Task) { errorMessage = "Only task nodes can be completed."; return false; }
     node->Complete();
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::UnsetTask(const std::string& id, std::string& errorMessage) {
+    TaskNode* node = GetNode(id);
+    if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
+    if (node->kind != NodeKind::Task) { errorMessage = "Only task nodes can be unset."; return false; }
+    if (!node->completed) { errorMessage = "Task is already unset: " + id; return false; }
+    node->Unset();
     errorMessage.clear();
     return true;
 }
