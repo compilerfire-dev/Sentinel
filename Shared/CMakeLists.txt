@@ -34,4 +34,11 @@ if(BUILD_TESTING)
     target_link_libraries(SentinelSharedTaskWorldMigrationTest PRIVATE SentinelShared)
     add_test(NAME SentinelShared.SharedTaskWorldMigration
              COMMAND SentinelSharedTaskWorldMigrationTest)
+
+    add_executable(SentinelSharedTaskMergeTest
+        tests/SharedTaskMergeTest.cpp
+    )
+    target_link_libraries(SentinelSharedTaskMergeTest PRIVATE SentinelShared)
+    add_test(NAME SentinelShared.SharedTaskMerge
+             COMMAND SentinelSharedTaskMergeTest)
 endif()
