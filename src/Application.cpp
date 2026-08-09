@@ -100,10 +100,6 @@ short NearestTerminalColor(const RgbColor& color) {
         return NearestBasicColor(color);
     }
 
-    // Do not redefine the terminal's palette with init_color(). Instead,
-    // inspect the palette ncurses already exposes and select the closest
-    // foreground/background entry independently. This is considerably more
-    // portable across xterm-compatible and fixed-palette terminals.
     const int colorLimit = std::min(
         COLORS,
         static_cast<int>(std::numeric_limits<short>::max()) + 1
@@ -159,6 +155,11 @@ bool InitializeTaskColorPair(
     const short backgroundIndex = NearestTerminalColor(background);
 
     return init_pair(pair, foregroundIndex, backgroundIndex) != ERR;
+}
+
+void DrawClippedField(int row, int column, int maxWidth, const std::string& text) {
+    if (maxWidth <= 0 || column < 0) return;
+    mvaddnstr(row, column, text.c_str(), maxWidth);
 }
 
 } // namespace
@@ -219,8 +220,6 @@ void Application::ApplyColors() {
         persistenceStatus_ = "Terminal could not initialize the default task color pair.";
     }
 
-    // Pair zero remains the terminal's normal UI style. Only task rows select
-    // TaskColorPair or a per-task pair while they are being rendered.
     bkgd(A_NORMAL);
     attr_set(A_NORMAL, 0, nullptr);
 }
@@ -493,12 +492,28 @@ void Application::RenderTasks() {
         if (!task) continue;
 
         const char* state = task->IsCompleted() ? "[x]" : (task->IsRunning() ? "[>]" : "[ ]");
-        std::ostringstream line;
-        line << task->GetId()
-             << ' ' << state
-             << ' ' << task->GetName()
-             << " - " << FormatDuration(task->GetElapsedTime())
-             << " - " << task->GetCompletionDateString();
+
+        const std::string idField = task->GetId() + " " + state;
+        const std::string nameField = task->GetName();
+        const std::string elapsedField = FormatDuration(task->GetElapsedTime());
+        const std::string completionField = task->GetCompletionDateString();
+        const std::string timeField = elapsedField + "  " + completionField;
+
+        // Column intent:
+        //   ID/state:  far left
+        //   name:      starts around 25% of the terminal width
+        //   time:      right-aligned against the far right edge
+        const int rightEdge = std::max(0, width - 1);
+        const int nameColumn = std::clamp(width / 4, 8, std::max(8, rightEdge));
+        const int timeWidth = static_cast<int>(timeField.size());
+        const int desiredTimeColumn = rightEdge - timeWidth;
+        const int minimumTimeColumn = nameColumn + 8;
+        const int timeColumn = std::max(minimumTimeColumn, desiredTimeColumn);
+
+        const int idWidth = std::max(0, nameColumn - 2);
+        const int nameWidth = std::max(0, std::min(timeColumn - nameColumn - 2, rightEdge - nameColumn));
+        const int actualTimeColumn = std::min(timeColumn, std::max(0, rightEdge - timeWidth));
+        const int actualTimeWidth = std::max(0, rightEdge - actualTimeColumn);
 
         short pair = TaskColorPair;
 
@@ -516,13 +531,18 @@ void Application::RenderTasks() {
         }
 
         if (has_colors()) {
-            // Pass the pair explicitly rather than OR-ing COLOR_PAIR into the
-            // attribute mask. This guarantees ncurses receives foreground and
-            // background from the same initialized pair.
             attr_set(A_NORMAL, pair, nullptr);
         }
 
-        mvaddnstr(row++, 0, line.str().c_str(), std::max(0, width - 1));
+        // Clear only the task row, then draw each field independently. This
+        // keeps every visible task aligned to the same terminal columns.
+        move(row, 0);
+        clrtoeol();
+        DrawClippedField(row, 0, idWidth, idField);
+        DrawClippedField(row, nameColumn, nameWidth, nameField);
+        DrawClippedField(row, actualTimeColumn, actualTimeWidth, timeField);
+
+        ++row;
         attr_set(A_NORMAL, 0, nullptr);
         ++visibleSlot;
     }
