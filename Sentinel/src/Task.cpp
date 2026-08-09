@@ -32,6 +32,13 @@ void Task::Complete() {
     completedAt_ = SystemClock::now();
 }
 
+void Task::Unset() {
+    if (!completed_) return;
+    completed_ = false;
+    running_ = false;
+    completedAt_ = SystemClock::time_point{};
+}
+
 std::chrono::seconds Task::GetElapsedTime() const {
     if (!running_) return accumulatedTime_;
     return accumulatedTime_ + std::chrono::duration_cast<std::chrono::seconds>(SteadyClock::now() - startedAt_);
