@@ -88,7 +88,7 @@ inline std::string FormatDuration(std::chrono::seconds duration) {
 
     std::ostringstream output;
     bool first = true;
-    const auto append = [&](auto value, char unit) mutable {
+    auto append = [&](auto value, char unit) {
         if (value <= 0) return;
         if (!first) output << ' ';
         output << value << unit;
