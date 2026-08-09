@@ -1,6 +1,7 @@
 add_executable(SentinelTasks
     main.cpp
     src/Application.cpp
+    src/TaskTree.cpp
 )
 
 target_include_directories(SentinelTasks PRIVATE
