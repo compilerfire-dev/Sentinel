@@ -8,7 +8,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 find_package(Curses REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
 
+add_subdirectory(Shared)
 add_subdirectory(Sentinel)
 add_subdirectory(SentinelTasks)
 add_subdirectory(SentinelStats)
