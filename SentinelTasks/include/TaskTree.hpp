@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Color.hpp"
+#include "TimeFragment.hpp"
 
 #include <chrono>
 #include <optional>
@@ -15,6 +16,7 @@ enum class NodeKind {
 
 struct TaskNode {
     using Clock = std::chrono::steady_clock;
+    using SystemClock = std::chrono::system_clock;
 
     std::string id;
     std::string name;
@@ -29,14 +31,26 @@ struct TaskNode {
     bool running{false};
     bool completed{false};
     Clock::time_point startedAt{};
-    std::chrono::system_clock::time_point completedAt{};
+    SystemClock::time_point createdAt{SystemClock::now()};
+    SystemClock::time_point completedAt{};
+    std::vector<SentinelShared::TimeFragment> timeFragments;
 
     void Start();
     void Stop();
     void Complete();
     void Unset();
+    void RestoreTiming(
+        std::chrono::seconds elapsed,
+        bool restoredCompleted,
+        bool restoredRunning,
+        SystemClock::time_point restoredCreatedAt,
+        SystemClock::time_point restoredCompletedAt,
+        std::vector<SentinelShared::TimeFragment> fragments
+    );
     std::chrono::seconds Elapsed() const;
+    std::vector<SentinelShared::TimeFragment> TimeFragments() const;
     std::string ElapsedString() const;
+    std::string CreatedString() const;
     std::string CompletionString() const;
 };
 
