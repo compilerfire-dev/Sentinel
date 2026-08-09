@@ -17,6 +17,29 @@ private:
         std::string replacement;
     };
 
+    enum class DialogFieldKind {
+        TextInput,
+        DropList
+    };
+
+    struct DialogField {
+        std::string label;
+        DialogFieldKind kind{DialogFieldKind::TextInput};
+        std::string value;
+        std::size_t cursor{0};
+        std::vector<std::string> options;
+        std::size_t selectedOption{0};
+        bool dropdownOpen{false};
+    };
+
+    struct CommandDialog {
+        std::string command;
+        std::string title;
+        std::vector<DialogField> fields;
+        std::size_t focusedControl{0};
+        std::string validationMessage;
+    };
+
     void HandleInput();
     void HandleMouse();
     void ExecuteCommand(const std::string& commandLine);
@@ -28,6 +51,7 @@ private:
     void RenderSuggestions(const std::vector<Suggestion>& suggestions);
     void RenderStatus();
     void RenderCommandLine();
+    void RenderCommandDialog();
 
     std::vector<Suggestion> BuildSuggestions() const;
     void AcceptSuggestion(const std::vector<Suggestion>& suggestions);
@@ -45,6 +69,22 @@ private:
     void SelectFirstChild();
     void EnsureSelection();
 
+    bool OpenCommandDialog(const std::string& command);
+    void CloseCommandDialog();
+    void HandleCommandDialogInput(int key);
+    void HandleCommandDialogMouse(int mouseX, int mouseY);
+    void MoveDialogFocus(int delta);
+    void OpenFocusedDropList();
+    void CloseFocusedDropList(bool acceptSelection);
+    bool SubmitCommandDialog();
+    std::string BuildDialogCommand() const;
+    std::vector<std::string> NodeIdOptions(bool foldersOnly, bool includeRoot) const;
+    std::optional<std::size_t> FindOptionIndex(
+        const std::vector<std::string>& options,
+        const std::string& value
+    ) const;
+
+    static std::string QuoteArgument(const std::string& value);
     static std::vector<std::string> Tokenize(const std::string& line);
     static std::string JoinTokens(const std::vector<std::string>& tokens, std::size_t start);
     static std::size_t PreviousUtf8Boundary(const std::string& text, std::size_t position);
@@ -67,4 +107,6 @@ private:
 
     std::size_t selectedSuggestion_{0};
     bool navigatingSuggestions_{false};
+
+    std::optional<CommandDialog> commandDialog_;
 };
