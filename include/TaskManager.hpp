@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 struct TaskSearchResult {
@@ -28,6 +29,10 @@ public:
     std::vector<std::size_t> Search(const std::string& query) const;
     std::optional<std::size_t> FindBestMatch(const std::string& query) const;
 
+    void DefineColor(std::string id, const RgbColor& color);
+    std::optional<RgbColor> GetDefinedColor(const std::string& id) const;
+    const std::unordered_map<std::string, RgbColor>& GetDefinedColors() const noexcept;
+
     bool Load(std::string& errorMessage);
     bool Save(std::string& errorMessage) const;
     bool SetJsonFile(const std::string& path, std::string& errorMessage);
@@ -37,5 +42,6 @@ public:
 
 private:
     std::vector<Task> tasks_;
+    std::unordered_map<std::string, RgbColor> definedColors_;
     std::string jsonFilePath_{"current_data.json"};
 };
