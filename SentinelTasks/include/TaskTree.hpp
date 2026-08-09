@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Color.hpp"
+
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -17,6 +19,8 @@ struct TaskNode {
     std::string parentId;
     NodeKind kind{NodeKind::Task};
     std::vector<std::string> children;
+    std::optional<RgbColor> foregroundColor;
+    std::optional<RgbColor> backgroundColor;
 };
 
 struct VisibleTreeNode {
@@ -37,6 +41,8 @@ public:
 
     bool RemoveNode(const std::string& id, std::string& errorMessage);
     bool SetDescription(const std::string& id, std::string description, std::string& errorMessage);
+    bool SetColor(const std::string& id, RgbColor foreground, RgbColor background, std::string& errorMessage);
+    void ClearColor(const std::string& id);
 
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
