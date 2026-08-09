@@ -18,13 +18,16 @@ SentinelTasks is the tree-oriented terminal companion to Sentinel. The task tree
 addFolder <id> <parent|root> <name>
 addTask <id> <parent|root> <name>
 remove <id>
+erase <id>
 setDescription
 setDescription <id>
 setDescription <id> <description>
 start <task-id>
 stop <task-id>
 done <task-id>
+unset <task-id>
 showTimes
+autoSave <duration>
 setJsonFile
 setJsonFile <path.json>
 defineColor <name> rgb(r,g,b)
@@ -39,11 +42,15 @@ list
 quit
 ```
 
+`erase` is an explicit alias for `remove`. Erasing a folder recursively removes its descendants as well.
+
+`unset` reverses task completion: `[x]` becomes an idle task again, the completion timestamp is cleared, and accumulated elapsed time is preserved. The task can subsequently be started again with `start`.
+
 Names, descriptions, IDs, paths, and custom color names can be enclosed in double quotes when they contain spaces.
 
 ## Selection modes
 
-SentinelTasks now intentionally provides two different selection workflows.
+SentinelTasks intentionally provides two different selection workflows.
 
 ### Manual selection
 
@@ -62,6 +69,7 @@ Up / Down    previous / next visible node
 Left         select parent
 Right        select first child
 Mouse click  select the clicked tree node
+Mouse wheel  scroll overflowing tree rows
 Enter        keep selection and leave manual mode
 Esc          leave manual mode
 ```
@@ -94,7 +102,7 @@ so scripts and command-line-oriented workflows do not need to use the popup.
 
 SentinelTasks loads and autosaves `current_data.json`. Its data is stored under the `sentinelTasks` object so unrelated Sentinel/statistics sections in the same JSON file are preserved.
 
-The persisted tree includes node hierarchy, names, descriptions, colors, named colors, elapsed task time, running/completed state, and completion timestamps.
+The persisted tree includes node hierarchy, names, descriptions, colors, named colors, elapsed task time, running/completed state, completion timestamps, and autosave interval.
 
 Enter:
 
@@ -171,9 +179,11 @@ start opengl
 stop opengl
 start opengl
 done opengl
+unset opengl
+start opengl
 ```
 
-`start` begins or resumes elapsed-time measurement, `stop` accumulates the current interval, and `done` stops the timer and records a completion timestamp. Completed task nodes cannot be restarted.
+`start` begins or resumes elapsed-time measurement, `stop` accumulates the current interval, and `done` stops the timer and records a completion timestamp. A completed task cannot be restarted until `unset` clears the completed state. `unset` does not reset elapsed time.
 
 The selected task's timing information is displayed in the right-side `Description / Timing` pane:
 
@@ -187,7 +197,7 @@ Study OpenGL
 Read the rendering chapter and implement the examples.
 ```
 
-The tree also uses `[>]` for a running task and `[x]` for a completed task.
+The tree uses `[>]` for a running task and `[x]` for a completed task.
 
 Use:
 
@@ -220,7 +230,7 @@ SentinelTasks also provides the built-in color family used by Sentinel.
 
 ## GUI-style argument windows
 
-Argument-taking commands can open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove` and `select` use node drop-lists. `start`, `stop`, and `done` use task-only drop-lists. `defineColor` and `color` provide their color controls.
+Argument-taking commands can open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `erase`, and `select` use node drop-lists. `start`, `stop`, `done`, and `unset` use task-only drop-lists. `defineColor` and `color` provide their color controls.
 
 `manualSelect` is deliberately not a popup command: it enters arrow/mouse tree-selection mode immediately. `setDescription` uses the embedded right-pane editor, while bare `setJsonFile` uses the desktop file chooser.
 
@@ -234,6 +244,7 @@ Down       enter/navigate suggestions
 Up         command history
 Left/Right edit cursor position
 Mouse      position cursor / choose suggestion
+Mouse wheel scroll overflowing tree/info rows
 Enter      execute command
 Backspace  delete before cursor
 ```
