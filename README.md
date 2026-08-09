@@ -6,25 +6,97 @@ Sentinel is a terminal productivity tracker written in C++20 using ncurses.
 
 - One-row task list with task ID, state, name, elapsed time, and completion date.
 - Live elapsed-time updates while a task is running.
-- Command prompt at the bottom of the terminal.
-- Interactive fuzzy command palette rendered above the prompt while typing.
-- Add, remove, start, stop, complete, and search tasks.
-- Ranked, case-insensitive fuzzy search.
-- Task commands accept either numeric IDs or approximate task names.
+- Interactive fuzzy command palette above the prompt.
+- Ranked fuzzy matching for commands and task names.
 - Keyboard and mouse selection of fuzzy suggestions.
+- Automatic JSON persistence using the vendored `nlohmann::json` header.
+- Runtime switching between JSON data files.
+- Configurable foreground/background RGB colors.
+
+## Commands
+
+Type `commands` inside Sentinel to display the complete command list.
+
+```text
+add <task name>
+remove <task id | fuzzy name>
+start <task id | fuzzy name>
+stop <task id | fuzzy name>
+done <task id | fuzzy name>
+search <fuzzy text>
+list
+commands
+setJsonFile <json_file_path.json>
+color rgb(r,g,b) bg rgb(r,g,b)
+help
+quit
+```
+
+`rpg(r,g,b)` is also accepted as an alias for `rgb(r,g,b)`.
+
+## JSON persistence
+
+Sentinel starts with:
+
+```text
+current_data.json
+```
+
+If that file does not exist it is created automatically. Task mutations are saved immediately, running timers are periodically autosaved, and Sentinel saves once more when it exits.
+
+Example JSON structure:
+
+```json
+{
+    "version": 1,
+    "tasks": [
+        {
+            "name": "Study linear algebra",
+            "elapsed_seconds": 1250,
+            "running": false,
+            "completed": true,
+            "completed_at_epoch": 1786267800
+        }
+    ]
+}
+```
+
+Running tasks resume from their stored elapsed duration when the file is loaded.
+
+### Switching data files
+
+```text
+setJsonFile projects/open_gl.json
+```
+
+Before switching, Sentinel saves the currently selected JSON file. It then clears the in-memory task list and selects the requested path.
+
+If the selected file exists, its tasks are loaded. If it does not exist, Sentinel creates a fresh JSON file with an empty task list.
+
+The currently selected JSON file is shown in Sentinel's header.
+
+## Colors
+
+Canonical syntax:
+
+```text
+color rgb(255,255,255) bg rgb(0,0,0)
+```
+
+For example:
+
+```text
+color rgb(0,255,0) bg rgb(0,0,0)
+color rgb(255,210,120) bg rgb(20,20,40)
+```
+
+Each RGB channel must be from `0` through `255`.
+
+When the terminal supports mutable ncurses colors, Sentinel applies the requested RGB values. On terminals that only support the standard palette, Sentinel chooses the nearest basic terminal color.
 
 ## Interactive command palette
 
-Start typing a command and Sentinel immediately ranks matching commands above the command line:
-
-```text
-  start   -  start or resume a task
-> stop    -  stop a running task
-  search  -  fuzzy-search tasks
-------------------------------------------------------------
-Tab complete | Up/Down select | click select
-> st
-```
+Start typing a command and Sentinel ranks matching commands directly above the command line. The new `commands`, `setJsonFile`, and `color` commands are included in this fuzzy palette.
 
 Controls:
 
@@ -36,42 +108,28 @@ Mouse     click a suggestion to accept it
 Backspace edit the current command
 ```
 
-The palette is context-sensitive. After a task-oriented command is completed, suggestions change from command names to task names:
+After task-oriented commands such as `start`, `stop`, `done`, `remove`, and `search`, the palette switches to fuzzy task-name suggestions.
 
-```text
-> start opgl
+## Fuzzy matching
 
-> 0  Develop OpenGL renderer
-  3  Refactor OpenGL rendering backend
-```
+Sentinel treats a query as an ordered subsequence and rewards:
 
-Typing continues to fuzzy-filter and rank those task names. `Tab`, arrow selection, and mouse selection then place the selected task into the command line.
-
-## Commands
-
-```text
-add <task name>
-remove <task id | fuzzy name>
-start <task id | fuzzy name>
-stop <task id | fuzzy name>
-done <task id | fuzzy name>
-search <fuzzy text>
-list
-help
-quit
-```
+- exact matches,
+- prefixes,
+- consecutive characters,
+- word-boundary matches,
+- matches occurring earlier in the candidate,
+- compact matches with fewer gaps.
 
 Examples:
 
 ```text
 add Develop OpenGL renderer
 add Study linear algebra
-add Refactor rendering system
 
-search opgl rend
 start opgl rend
 done linear alg
-remove refact render
+search ogl
 ```
 
 Numeric task IDs continue to work:
@@ -81,17 +139,6 @@ start 0
 stop 0
 done 0
 ```
-
-## Fuzzy matching
-
-Sentinel treats the query as an ordered subsequence of the candidate and ranks matching commands and tasks. The scoring system rewards:
-
-- exact matches,
-- prefixes,
-- characters appearing consecutively,
-- matches beginning at word boundaries,
-- matches appearing earlier in the candidate,
-- compact matches with fewer gaps.
 
 Task states:
 
@@ -112,6 +159,4 @@ cmake --build build
 ./build/Sentinel
 ```
 
-## Next milestones
-
-The current version intentionally keeps storage in memory. Logical next steps are JSON persistence, projects/tags, historical sessions, productivity reports, command history, and richer interactive task selection.
+The repository contains `include/nlohmann/json.hpp`, so an additional JSON package is not required.
