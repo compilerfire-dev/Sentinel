@@ -19,7 +19,7 @@ int InitializeLegend(WINDOW* window, int columns) {
     const std::string timerLegend = "ELAPSED / COMPLETED AT";
     const int timerColumn = std::max(nameColumn + 8, columns - static_cast<int>(timerLegend.size()) - 1);
 
-    DrawAt(window, 0, std::max(0, nameColumn - 1), "ID / STATE  [ ] idle  [>] running  [x] done");
+    DrawAt(window, 0, std::max(0, nameColumn - 1), "ID / STATE  [ ] idle  [x] done  white row = running");
     DrawAt(window, nameColumn, std::max(0, timerColumn - nameColumn - 1), "TASK");
     DrawAt(window, timerColumn, std::max(0, columns - timerColumn - 1), timerLegend);
 
