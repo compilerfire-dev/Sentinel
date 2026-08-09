@@ -24,6 +24,7 @@ public:
     void Start();
     void Stop();
     void Complete();
+    void Unset();
 
     void SetColor(RgbColor foreground, RgbColor background);
     void ClearColor();
