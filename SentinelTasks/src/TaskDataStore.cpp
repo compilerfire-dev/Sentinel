@@ -1,12 +1,15 @@
 #include "TaskDataStore.hpp"
 
 #include "JsonDataStore.hpp"
+#include "SharedTaskWorld.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 using nlohmann::json;
 
@@ -45,6 +48,91 @@ SentinelShared::TimeFragment FragmentFromJson(const json& value) {
     return fragment;
 }
 
+json TaskNodeToSharedJson(const TaskNode& node) {
+    const auto completedEpoch = node.completed
+        ? SentinelShared::EpochSeconds(node.completedAt)
+        : 0LL;
+
+    json item = {
+        {"id", node.id},
+        {"name", node.name},
+        {"created_at_epoch", SentinelShared::EpochSeconds(node.createdAt)},
+        {"elapsed_seconds", node.Elapsed().count()},
+        {"running", node.running},
+        {"completed", node.completed},
+        {"completed_at_epoch", completedEpoch},
+        {"time_fragments", json::array()}
+    };
+
+    for (const auto& fragment : node.TimeFragments()) {
+        item["time_fragments"].push_back(FragmentToJson(fragment));
+    }
+
+    if (node.foregroundColor && node.backgroundColor) {
+        item["color"] = {
+            {"foreground", ColorToJson(*node.foregroundColor)},
+            {"background", ColorToJson(*node.backgroundColor)}
+        };
+    }
+
+    return item;
+}
+
+bool RestoreTaskFromSharedJson(
+    const json& item,
+    TaskNode& node,
+    std::string& errorMessage
+) {
+    try {
+        node.name = item.value("name", node.id);
+        const auto elapsed = std::chrono::seconds(
+            item.value("elapsed_seconds", 0LL)
+        );
+        const bool completed = item.value("completed", false);
+        const bool running = item.value("running", false) && !completed;
+        const auto createdEpoch = item.value("created_at_epoch", 0LL);
+        const auto completedEpoch = item.value("completed_at_epoch", 0LL);
+
+        std::vector<SentinelShared::TimeFragment> fragments;
+        if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
+            for (const auto& fragmentJson : item["time_fragments"]) {
+                if (fragmentJson.is_object()) {
+                    fragments.push_back(FragmentFromJson(fragmentJson));
+                }
+            }
+        }
+
+        node.RestoreTiming(
+            elapsed,
+            completed,
+            running,
+            SentinelShared::TimePointFromEpoch(createdEpoch),
+            SentinelShared::TimePointFromEpoch(completedEpoch),
+            std::move(fragments)
+        );
+
+        node.foregroundColor.reset();
+        node.backgroundColor.reset();
+        if (item.contains("color") && item["color"].is_object()) {
+            const auto& color = item["color"];
+            if (color.contains("foreground") && color.contains("background")) {
+                node.foregroundColor = ColorFromJson(
+                    color["foreground"], RgbColor{255, 255, 255}
+                );
+                node.backgroundColor = ColorFromJson(
+                    color["background"], RgbColor{0, 0, 0}
+                );
+            }
+        }
+
+        errorMessage.clear();
+        return true;
+    } catch (const std::exception& exception) {
+        errorMessage = "Invalid canonical shared task: " + std::string(exception.what());
+        return false;
+    }
+}
+
 } // namespace
 
 TaskDataStore::TaskDataStore(std::filesystem::path path)
@@ -58,9 +146,24 @@ bool TaskDataStore::Load(
     std::string& errorMessage
 ) const {
     try {
+        bool purgedLegacyWorld = false;
+        if (!SentinelShared::EnsureSharedTaskWorld(
+                path_,
+                purgedLegacyWorld,
+                errorMessage)) {
+            return false;
+        }
+
         json root;
         bool exists = false;
         if (!SentinelShared::JsonDataStore::Read(path_, root, exists, errorMessage)) {
+            return false;
+        }
+        if (!exists || !root.contains("sharedTasks") ||
+            !root["sharedTasks"].is_object() ||
+            !root["sharedTasks"].contains("tasks") ||
+            !root["sharedTasks"]["tasks"].is_array()) {
+            errorMessage = "Shared task world is missing or invalid.";
             return false;
         }
 
@@ -69,116 +172,163 @@ bool TaskDataStore::Load(
         std::unordered_map<std::string, RgbColor> loadedColors;
         std::chrono::seconds loadedAutoSaveInterval{1};
 
-        if (!exists || !root.contains("sentinelTasks")) {
-            tree = std::move(loadedTree);
-            displaySettings = loadedDisplay;
-            definedColors = std::move(loadedColors);
-            autoSaveInterval = loadedAutoSaveInterval;
-            errorMessage.clear();
-            return true;
-        }
+        const json* layout = nullptr;
+        if (root.contains("sentinelTasks") && root["sentinelTasks"].is_object()) {
+            layout = &root["sentinelTasks"];
+            loadedAutoSaveInterval = std::chrono::seconds(
+                std::max(1LL, layout->value("auto_save_seconds", 1LL))
+            );
 
-        const json& data = root.at("sentinelTasks");
-        if (!data.is_object()) {
-            errorMessage = "sentinelTasks must be a JSON object.";
-            return false;
-        }
-
-        loadedAutoSaveInterval = std::chrono::seconds(
-            std::max(1LL, data.value("auto_save_seconds", 1LL))
-        );
-
-        if (data.contains("display") && data["display"].is_object()) {
-            const auto& display = data["display"];
-            if (display.contains("foreground")) {
-                loadedDisplay.foreground = ColorFromJson(
-                    display["foreground"], loadedDisplay.foreground
-                );
+            if (layout->contains("display") && (*layout)["display"].is_object()) {
+                const auto& display = (*layout)["display"];
+                if (display.contains("foreground")) {
+                    loadedDisplay.foreground = ColorFromJson(
+                        display["foreground"], loadedDisplay.foreground
+                    );
+                }
+                if (display.contains("background")) {
+                    loadedDisplay.background = ColorFromJson(
+                        display["background"], loadedDisplay.background
+                    );
+                }
             }
-            if (display.contains("background")) {
-                loadedDisplay.background = ColorFromJson(
-                    display["background"], loadedDisplay.background
-                );
+
+            if (layout->contains("defined_colors") && (*layout)["defined_colors"].is_object()) {
+                for (auto iterator = (*layout)["defined_colors"].begin();
+                     iterator != (*layout)["defined_colors"].end(); ++iterator) {
+                    loadedColors[iterator.key()] = ColorFromJson(
+                        iterator.value(), RgbColor{255, 255, 255}
+                    );
+                }
             }
         }
 
-        if (data.contains("defined_colors") && data["defined_colors"].is_object()) {
-            for (auto iterator = data["defined_colors"].begin();
-                 iterator != data["defined_colors"].end(); ++iterator) {
-                loadedColors[iterator.key()] = ColorFromJson(
-                    iterator.value(), RgbColor{255, 255, 255}
-                );
+        std::unordered_map<std::string, json> canonicalById;
+        std::vector<std::string> canonicalOrder;
+        for (const auto& item : root["sharedTasks"]["tasks"]) {
+            if (!item.is_object()) continue;
+            const std::string id = item.value("id", std::string{});
+            if (id.empty()) {
+                errorMessage = "Canonical shared task has an empty ID.";
+                return false;
             }
+            if (canonicalById.contains(id)) {
+                errorMessage = "Duplicate global task ID: " + id;
+                return false;
+            }
+            canonicalById.emplace(id, item);
+            canonicalOrder.push_back(id);
         }
 
-        if (data.contains("nodes")) {
-            if (!data["nodes"].is_array()) {
+        std::vector<json> taskPlacements;
+        if (layout && layout->contains("nodes")) {
+            if (!(*layout)["nodes"].is_array()) {
                 errorMessage = "sentinelTasks.nodes must be an array.";
                 return false;
             }
 
-            for (const auto& item : data["nodes"]) {
+            // Folders are layout-only and are restored first so task placement
+            // can safely reference any folder parent.
+            for (const auto& item : (*layout)["nodes"]) {
+                if (!item.is_object()) continue;
+                const std::string type = item.value("type", std::string{});
+                if (type != "folder") {
+                    if (type == "task") taskPlacements.push_back(item);
+                    continue;
+                }
+
                 const std::string id = item.at("id").get<std::string>();
                 const std::string name = item.value("name", id);
                 std::string parent;
                 if (item.contains("parent") && item["parent"].is_string()) {
                     parent = item["parent"].get<std::string>();
                 }
-                const std::string type = item.value("type", std::string{"task"});
-                const NodeKind kind = type == "folder" ? NodeKind::Folder : NodeKind::Task;
 
-                std::string addError;
-                if (!loadedTree.AddNode(kind, id, parent, name, addError)) {
-                    errorMessage = "Could not load node '" + id + "': " + addError;
+                if (canonicalById.contains(id)) {
+                    errorMessage = "Folder ID collides with global task ID: " + id;
                     return false;
                 }
 
-                TaskNode* node = loadedTree.GetNode(id);
-                if (!node) continue;
-
-                node->description = item.value("description", std::string{});
-                const auto createdEpoch = item.value("created_at_epoch", 0LL);
-
-                if (item.contains("color") && item["color"].is_object()) {
-                    const auto& color = item["color"];
-                    if (color.contains("foreground") && color.contains("background")) {
-                        node->foregroundColor = ColorFromJson(
-                            color["foreground"], RgbColor{255, 255, 255}
-                        );
-                        node->backgroundColor = ColorFromJson(
-                            color["background"], RgbColor{0, 0, 0}
-                        );
-                    }
+                std::string addError;
+                if (!loadedTree.AddNode(NodeKind::Folder, id, parent, name, addError)) {
+                    errorMessage = "Could not load folder '" + id + "': " + addError;
+                    return false;
                 }
 
-                if (kind == NodeKind::Task) {
-                    const auto elapsed = std::chrono::seconds(
-                        item.value("elapsed_seconds", 0LL)
-                    );
-                    const bool completed = item.value("completed", false);
-                    const bool running = item.value("running", false) && !completed;
-                    const auto completedEpoch = item.value("completed_at_epoch", 0LL);
-
-                    std::vector<SentinelShared::TimeFragment> fragments;
-                    if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
-                        for (const auto& fragmentJson : item["time_fragments"]) {
-                            if (fragmentJson.is_object()) {
-                                fragments.push_back(FragmentFromJson(fragmentJson));
-                            }
+                if (TaskNode* node = loadedTree.GetNode(id)) {
+                    node->description = item.value("description", std::string{});
+                    const auto createdEpoch = item.value("created_at_epoch", 0LL);
+                    if (createdEpoch > 0) {
+                        node->createdAt = SentinelShared::TimePointFromEpoch(createdEpoch);
+                    }
+                    if (item.contains("color") && item["color"].is_object()) {
+                        const auto& color = item["color"];
+                        if (color.contains("foreground") && color.contains("background")) {
+                            node->foregroundColor = ColorFromJson(
+                                color["foreground"], RgbColor{255, 255, 255}
+                            );
+                            node->backgroundColor = ColorFromJson(
+                                color["background"], RgbColor{0, 0, 0}
+                            );
                         }
                     }
-
-                    node->RestoreTiming(
-                        elapsed,
-                        completed,
-                        running,
-                        SentinelShared::TimePointFromEpoch(createdEpoch),
-                        SentinelShared::TimePointFromEpoch(completedEpoch),
-                        std::move(fragments)
-                    );
-                } else {
-                    node->createdAt = SentinelShared::TimePointFromEpoch(createdEpoch);
                 }
+            }
+        }
+
+        // Restore explicit tree placement for canonical tasks.
+        for (const auto& placement : taskPlacements) {
+            const std::string id = placement.value("id", std::string{});
+            const auto canonical = canonicalById.find(id);
+            if (canonical == canonicalById.end()) {
+                // Stale placement for a task erased from the shared registry.
+                continue;
+            }
+            if (loadedTree.GetNode(id)) {
+                errorMessage = "Duplicate SentinelTasks node/global task ID: " + id;
+                return false;
+            }
+
+            std::string parent;
+            if (placement.contains("parent") && placement["parent"].is_string()) {
+                parent = placement["parent"].get<std::string>();
+            }
+            const std::string name = canonical->second.value("name", id);
+
+            std::string addError;
+            if (!loadedTree.AddNode(NodeKind::Task, id, parent, name, addError)) {
+                errorMessage = "Could not place shared task '" + id + "': " + addError;
+                return false;
+            }
+            if (TaskNode* node = loadedTree.GetNode(id)) {
+                node->description = placement.value("description", std::string{});
+            }
+        }
+
+        // Any task created from Sentinel has no tree placement yet. It appears
+        // at SentinelTasks root automatically with the same global ID.
+        for (const auto& id : canonicalOrder) {
+            if (loadedTree.GetNode(id)) continue;
+            const auto& item = canonicalById.at(id);
+            const std::string name = item.value("name", id);
+            std::string addError;
+            if (!loadedTree.AddNode(NodeKind::Task, id, "root", name, addError)) {
+                errorMessage = "Could not materialize shared task '" + id + "': " + addError;
+                return false;
+            }
+        }
+
+        // Canonical task state always wins over tree metadata.
+        for (const auto& id : canonicalOrder) {
+            TaskNode* node = loadedTree.GetNode(id);
+            if (!node || node->kind != NodeKind::Task) {
+                errorMessage = "Shared task is not represented as a task node: " + id;
+                return false;
+            }
+            std::string restoreError;
+            if (!RestoreTaskFromSharedJson(canonicalById.at(id), *node, restoreError)) {
+                errorMessage = restoreError;
+                return false;
             }
         }
 
@@ -187,9 +337,10 @@ bool TaskDataStore::Load(
         definedColors = std::move(loadedColors);
         autoSaveInterval = loadedAutoSaveInterval;
         errorMessage.clear();
+        (void)purgedLegacyWorld;
         return true;
     } catch (const std::exception& exception) {
-        errorMessage = "Failed to load SentinelTasks JSON: " + std::string(exception.what());
+        errorMessage = "Failed to load shared SentinelTasks world: " + std::string(exception.what());
         return false;
     }
 }
@@ -201,61 +352,70 @@ bool TaskDataStore::Save(
     std::chrono::seconds autoSaveInterval,
     std::string& errorMessage
 ) const {
-    json data;
-    data["version"] = 2;
-    data["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
-    data["display"] = {
+    json layout;
+    layout["version"] = 3;
+    layout["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
+    layout["display"] = {
         {"foreground", ColorToJson(displaySettings.foreground)},
         {"background", ColorToJson(displaySettings.background)}
     };
-    data["defined_colors"] = json::object();
+    layout["defined_colors"] = json::object();
     for (const auto& [id, color] : definedColors) {
-        data["defined_colors"][id] = ColorToJson(color);
+        layout["defined_colors"][id] = ColorToJson(color);
     }
+    layout["nodes"] = json::array();
 
-    data["nodes"] = json::array();
+    json sharedTasks = json::array();
+
     for (const auto& visible : tree.Flatten()) {
         if (!visible.node) continue;
         const TaskNode& node = *visible.node;
 
-        json item = {
+        if (node.kind == NodeKind::Task) {
+            // Task state lives only in the canonical registry. The tree stores
+            // only placement/description linkage using that same global ID.
+            sharedTasks.push_back(TaskNodeToSharedJson(node));
+            layout["nodes"].push_back({
+                {"id", node.id},
+                {"type", "task"},
+                {"parent", node.parentId},
+                {"description", node.description}
+            });
+            continue;
+        }
+
+        json folder = {
             {"id", node.id},
             {"name", node.name},
             {"description", node.description},
             {"parent", node.parentId},
-            {"type", node.kind == NodeKind::Folder ? "folder" : "task"},
+            {"type", "folder"},
             {"created_at_epoch", SentinelShared::EpochSeconds(node.createdAt)}
         };
-
         if (node.foregroundColor && node.backgroundColor) {
-            item["color"] = {
+            folder["color"] = {
                 {"foreground", ColorToJson(*node.foregroundColor)},
                 {"background", ColorToJson(*node.backgroundColor)}
             };
         }
-
-        if (node.kind == NodeKind::Task) {
-            const auto completedEpoch = node.completed
-                ? SentinelShared::EpochSeconds(node.completedAt)
-                : 0LL;
-
-            item["elapsed_seconds"] = node.Elapsed().count();
-            item["running"] = node.running;
-            item["completed"] = node.completed;
-            item["completed_at_epoch"] = completedEpoch;
-            item["time_fragments"] = json::array();
-            for (const auto& fragment : node.TimeFragments()) {
-                item["time_fragments"].push_back(FragmentToJson(fragment));
-            }
-        }
-
-        data["nodes"].push_back(std::move(item));
+        layout["nodes"].push_back(std::move(folder));
     }
 
     return SentinelShared::JsonDataStore::Update(
         path_,
-        [data = std::move(data)](json& root, std::string& mutationError) mutable {
-            root["sentinelTasks"] = std::move(data);
+        [layout = std::move(layout), sharedTasks = std::move(sharedTasks)](
+            json& root,
+            std::string& mutationError
+        ) mutable {
+            root["sharedTasks"] = {
+                {"version", SentinelShared::SharedTaskWorldVersion},
+                {"tasks", std::move(sharedTasks)}
+            };
+            root["sentinelTasks"] = std::move(layout);
+            if (root.contains("sentinel") && root["sentinel"].is_object()) {
+                root["sentinel"].erase("tasks");
+            }
+            root.erase("tasks");
             mutationError.clear();
             return true;
         },
