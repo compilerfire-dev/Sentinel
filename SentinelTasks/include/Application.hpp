@@ -70,6 +70,13 @@ private:
     void SelectFirstChild();
     void EnsureSelection();
 
+    void BeginDescriptionEdit(const std::string& nodeId);
+    void HandleDescriptionEditInput(int key);
+    void HandleDescriptionEditMouse(int mouseX, int mouseY);
+    void CommitDescriptionEdit();
+    void CancelDescriptionEdit();
+    void InsertDescriptionNewline();
+
     bool OpenCommandDialog(const std::string& command);
     void CloseCommandDialog();
     void HandleCommandDialogInput(int key);
@@ -101,6 +108,11 @@ private:
     bool manualSelect_{false};
     std::string selectedId_;
     std::vector<std::string> visibleRowIds_;
+
+    bool descriptionEditing_{false};
+    std::string descriptionEditNodeId_;
+    std::string descriptionEditBuffer_;
+    std::size_t descriptionEditCursor_{0};
 
     std::string commandBuffer_;
     std::size_t cursorPosition_{0};
