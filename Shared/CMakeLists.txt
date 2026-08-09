@@ -1,6 +1,7 @@
 add_library(SentinelShared STATIC
     src/JsonDataStore.cpp
     src/NativeFileDialog.cpp
+    src/SharedTaskWorld.cpp
 )
 
 target_include_directories(SentinelShared PUBLIC
