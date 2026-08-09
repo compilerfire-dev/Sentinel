@@ -148,9 +148,15 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
         return false;
     }
 
+    const std::string previousPath = jsonFilePath_;
+    const std::vector<Task> previousTasks = tasks_;
     jsonFilePath_ = path;
-    tasks_.clear();
-    return Load(errorMessage);
+
+    if (Load(errorMessage)) return true;
+
+    jsonFilePath_ = previousPath;
+    tasks_ = previousTasks;
+    return false;
 }
 
 const std::string& TaskManager::GetJsonFile() const noexcept { return jsonFilePath_; }
