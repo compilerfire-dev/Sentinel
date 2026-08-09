@@ -37,7 +37,7 @@ std::string Unquote(std::string value) {
 }
 
 bool ParseAddArguments(const std::string& argument, std::string& id, std::string& name) {
-    static const std::regex pattern(R"(^\s*(?:"([^"]+)"|(\S+))\s+(?:"([^"]+)"|(.+?))\s*$)");
+    static const std::regex pattern(R"re(^\s*(?:"([^"]+)"|(\S+))\s+(?:"([^"]+)"|(.+?))\s*$)re");
     std::smatch match;
     if (!std::regex_match(argument, match, pattern)) return false;
     id = match[1].matched ? match[1].str() : match[2].str();
@@ -83,11 +83,11 @@ void CommandProcessor::Autosave() {
 
 bool CommandProcessor::ParseColorCommand(const std::string& argument) {
     static const std::regex defaultPattern(
-        R"(^\s*(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)",
+        R"re(^\s*(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)re",
         std::regex::icase
     );
     static const std::regex taskPattern(
-        R"(^\s*(?:"([^"]+)"|(\S+))\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)",
+        R"re(^\s*(?:"([^"]+)"|(\S+))\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)re",
         std::regex::icase
     );
 
