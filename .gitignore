@@ -1,5 +1,6 @@
 build/
 cmake-build-*/
 compile_commands.json
+current_data.json
 *.o
 *.out
