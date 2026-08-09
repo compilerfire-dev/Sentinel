@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -32,6 +33,7 @@ bool TaskDataStore::Load(
     TaskTree& tree,
     TreeDisplaySettings& displaySettings,
     std::unordered_map<std::string, RgbColor>& definedColors,
+    std::chrono::seconds& autoSaveInterval,
     std::string& errorMessage
 ) const {
     try {
@@ -39,6 +41,7 @@ bool TaskDataStore::Load(
             tree = TaskTree{};
             displaySettings = TreeDisplaySettings{};
             definedColors.clear();
+            autoSaveInterval = std::chrono::seconds(1);
             errorMessage.clear();
             return true;
         }
@@ -59,11 +62,13 @@ bool TaskDataStore::Load(
         TaskTree loadedTree;
         TreeDisplaySettings loadedDisplay;
         std::unordered_map<std::string, RgbColor> loadedColors;
+        std::chrono::seconds loadedAutoSaveInterval{1};
 
         if (!root.contains("sentinelTasks")) {
             tree = std::move(loadedTree);
             displaySettings = loadedDisplay;
             definedColors = std::move(loadedColors);
+            autoSaveInterval = loadedAutoSaveInterval;
             errorMessage.clear();
             return true;
         }
@@ -73,6 +78,10 @@ bool TaskDataStore::Load(
             errorMessage = "sentinelTasks must be a JSON object.";
             return false;
         }
+
+        loadedAutoSaveInterval = std::chrono::seconds(
+            std::max(1LL, data.value("auto_save_seconds", 1LL))
+        );
 
         if (data.contains("display") && data["display"].is_object()) {
             const auto& display = data["display"];
@@ -157,6 +166,7 @@ bool TaskDataStore::Load(
         tree = std::move(loadedTree);
         displaySettings = loadedDisplay;
         definedColors = std::move(loadedColors);
+        autoSaveInterval = loadedAutoSaveInterval;
         errorMessage.clear();
         return true;
     } catch (const std::exception& exception) {
@@ -169,6 +179,7 @@ bool TaskDataStore::Save(
     const TaskTree& tree,
     const TreeDisplaySettings& displaySettings,
     const std::unordered_map<std::string, RgbColor>& definedColors,
+    std::chrono::seconds autoSaveInterval,
     std::string& errorMessage
 ) const {
     try {
@@ -192,6 +203,7 @@ bool TaskDataStore::Save(
 
         json data;
         data["version"] = 1;
+        data["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
         data["display"] = {
             {"foreground", ColorToJson(displaySettings.foreground)},
             {"background", ColorToJson(displaySettings.background)}
