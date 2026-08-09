@@ -9,9 +9,10 @@ Sentinel is a terminal productivity tracker written in C++20 using ncurses.
 - Interactive fuzzy command palette above the prompt.
 - Ranked fuzzy matching for commands and task names.
 - Keyboard and mouse selection of fuzzy suggestions.
+- Command history recall with the Up/Down arrow keys.
 - Automatic JSON persistence using the vendored `nlohmann::json` header.
 - Runtime switching between JSON data files.
-- Configurable foreground/background RGB colors.
+- Configurable RGB foreground/background colors for task rows.
 
 ## Commands
 
@@ -75,7 +76,9 @@ If the selected file exists, its tasks are loaded. If it does not exist, Sentine
 
 The currently selected JSON file is shown in Sentinel's header.
 
-## Colors
+## Task colors
+
+The `color` command changes the task rows themselves. The header, fuzzy palette, status text, and command prompt remain in the terminal's normal colors.
 
 Canonical syntax:
 
@@ -94,19 +97,36 @@ Each RGB channel must be from `0` through `255`.
 
 When the terminal supports mutable ncurses colors, Sentinel applies the requested RGB values. On terminals that only support the standard palette, Sentinel chooses the nearest basic terminal color.
 
-## Interactive command palette
+## Interactive command palette and history
 
-Start typing a command and Sentinel ranks matching commands directly above the command line. The new `commands`, `setJsonFile`, and `color` commands are included in this fuzzy palette.
+Start typing a command and Sentinel ranks matching commands directly above the command line. The `commands`, `setJsonFile`, and `color` commands are included in this fuzzy palette.
 
 Controls:
 
 ```text
 Tab       accept the highlighted suggestion
-Up/Down   navigate suggestions
-Enter     execute normally, or accept after arrow navigation
+Down      begin navigating fuzzy suggestions / move downward
+Up        recall the previous command when not navigating suggestions
+Up/Down   navigate suggestions once suggestion navigation is active
+Up/Down   move backward/forward through command history while browsing history
+Enter     execute normally, or accept after suggestion navigation
 Mouse     click a suggestion to accept it
 Backspace edit the current command
 ```
+
+For example, after executing:
+
+```text
+start Study linear algebra
+```
+
+pressing `Up` at the command prompt recalls:
+
+```text
+> start Study linear algebra
+```
+
+Pressing `Up` repeatedly walks farther back through the in-memory command history. `Down` walks toward newer commands and eventually restores whatever text was in the prompt before history navigation began.
 
 After task-oriented commands such as `start`, `stop`, `done`, `remove`, and `search`, the palette switches to fuzzy task-name suggestions.
 
