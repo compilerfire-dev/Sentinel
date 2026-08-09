@@ -1,7 +1,69 @@
 #include "TaskTree.hpp"
 
 #include <algorithm>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 #include <utility>
+
+namespace {
+std::string FormatDuration(std::chrono::seconds seconds) {
+    const auto total = seconds.count();
+    const auto hours = total / 3600;
+    const auto minutes = (total % 3600) / 60;
+    const auto remaining = total % 60;
+
+    std::ostringstream stream;
+    stream << std::setfill('0')
+           << std::setw(2) << hours << ':'
+           << std::setw(2) << minutes << ':'
+           << std::setw(2) << remaining;
+    return stream.str();
+}
+}
+
+void TaskNode::Start() {
+    if (kind != NodeKind::Task || running || completed) return;
+    startedAt = Clock::now();
+    running = true;
+}
+
+void TaskNode::Stop() {
+    if (kind != NodeKind::Task || !running) return;
+    accumulatedTime += std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - startedAt);
+    running = false;
+}
+
+void TaskNode::Complete() {
+    if (kind != NodeKind::Task || completed) return;
+    Stop();
+    completed = true;
+    completedAt = std::chrono::system_clock::now();
+}
+
+std::chrono::seconds TaskNode::Elapsed() const {
+    if (kind != NodeKind::Task) return std::chrono::seconds{0};
+    if (!running) return accumulatedTime;
+    return accumulatedTime + std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - startedAt);
+}
+
+std::string TaskNode::ElapsedString() const {
+    return FormatDuration(Elapsed());
+}
+
+std::string TaskNode::CompletionString() const {
+    if (!completed) return "-";
+    const std::time_t time = std::chrono::system_clock::to_time_t(completedAt);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &time);
+#else
+    localtime_r(&time, &local);
+#endif
+    std::ostringstream stream;
+    stream << std::put_time(&local, "%Y-%m-%d %H:%M");
+    return stream.str();
+}
 
 bool TaskTree::AddNode(
     NodeKind kind,
@@ -84,12 +146,7 @@ bool TaskTree::SetDescription(const std::string& id, std::string description, st
     return true;
 }
 
-bool TaskTree::SetColor(
-    const std::string& id,
-    RgbColor foreground,
-    RgbColor background,
-    std::string& errorMessage
-) {
+bool TaskTree::SetColor(const std::string& id, RgbColor foreground, RgbColor background, std::string& errorMessage) {
     TaskNode* node = GetNode(id);
     if (!node) {
         errorMessage = "Node ID does not exist: " + id;
@@ -102,10 +159,38 @@ bool TaskTree::SetColor(
 }
 
 void TaskTree::ClearColor(const std::string& id) {
+    if (TaskNode* node = GetNode(id)) {
+        node->foregroundColor.reset();
+        node->backgroundColor.reset();
+    }
+}
+
+bool TaskTree::StartTask(const std::string& id, std::string& errorMessage) {
     TaskNode* node = GetNode(id);
-    if (!node) return;
-    node->foregroundColor.reset();
-    node->backgroundColor.reset();
+    if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
+    if (node->kind != NodeKind::Task) { errorMessage = "Timers can only be started on task nodes."; return false; }
+    if (node->completed) { errorMessage = "Completed tasks cannot be restarted."; return false; }
+    node->Start();
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::StopTask(const std::string& id, std::string& errorMessage) {
+    TaskNode* node = GetNode(id);
+    if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
+    if (node->kind != NodeKind::Task) { errorMessage = "Timers can only be stopped on task nodes."; return false; }
+    node->Stop();
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::CompleteTask(const std::string& id, std::string& errorMessage) {
+    TaskNode* node = GetNode(id);
+    if (!node) { errorMessage = "Node ID does not exist: " + id; return false; }
+    if (node->kind != NodeKind::Task) { errorMessage = "Only task nodes can be completed."; return false; }
+    node->Complete();
+    errorMessage.clear();
+    return true;
 }
 
 TaskNode* TaskTree::GetNode(const std::string& id) {
