@@ -1,12 +1,13 @@
 #include "TaskManager.hpp"
 
 #include "FuzzySearch.hpp"
+#include "JsonDataStore.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <utility>
 
 using nlohmann::json;
@@ -35,6 +36,14 @@ const json* SentinelSectionForRead(const json& root) {
 
 json* SentinelSectionForWrite(json& root) {
     if (root.contains("sentinel") && root["sentinel"].is_object()) {
+        return &root["sentinel"];
+    }
+
+    // Keep legacy flat Sentinel-only files flat, but use the namespaced
+    // section as soon as this is clearly a shared Sentinel workspace file.
+    if (root.contains("sentinelTasks") || root.contains("statistics") ||
+        root.contains("shared")) {
+        root["sentinel"] = json::object();
         return &root["sentinel"];
     }
     return &root;
@@ -149,100 +158,81 @@ bool TaskManager::Save(std::string& errorMessage) const {
 }
 
 bool TaskManager::SaveNow(std::string& errorMessage) const {
-    try {
-        const std::filesystem::path path(jsonFilePath_);
-        if (path.has_parent_path()) {
-            std::filesystem::create_directories(path.parent_path());
-        }
+    const std::filesystem::path path(jsonFilePath_);
 
-        json root = json::object();
-        if (std::filesystem::exists(path)) {
-            std::ifstream existing(path);
-            if (!existing) {
-                errorMessage = "Could not open JSON file for reading before save: " + jsonFilePath_;
-                return false;
+    const bool saved = SentinelShared::JsonDataStore::Update(
+        path,
+        [&](json& root, std::string& mutationError) {
+            json* section = SentinelSectionForWrite(root);
+            (*section)["version"] = 3;
+            (*section)["auto_save_seconds"] = autoSaveInterval_.count();
+            (*section)["defined_colors"] = json::object();
+            (*section)["tasks"] = json::array();
+
+            for (const auto& [id, color] : definedColors_) {
+                (*section)["defined_colors"][id] = ColorToJson(color);
             }
-            existing >> root;
-            if (!root.is_object()) {
-                errorMessage = "JSON root must be an object: " + jsonFilePath_;
-                return false;
-            }
-        }
 
-        json* section = SentinelSectionForWrite(root);
-        (*section)["version"] = 3;
-        (*section)["auto_save_seconds"] = autoSaveInterval_.count();
-        (*section)["defined_colors"] = json::object();
-        (*section)["tasks"] = json::array();
+            for (const Task& task : tasks_) {
+                const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+                    task.GetCompletionTime().time_since_epoch()
+                ).count();
 
-        for (const auto& [id, color] : definedColors_) {
-            (*section)["defined_colors"][id] = ColorToJson(color);
-        }
-
-        for (const Task& task : tasks_) {
-            const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-                task.GetCompletionTime().time_since_epoch()
-            ).count();
-
-            json item = {
-                {"id", task.GetId()},
-                {"name", task.GetName()},
-                {"elapsed_seconds", task.GetElapsedTime().count()},
-                {"running", task.IsRunning()},
-                {"completed", task.IsCompleted()},
-                {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0}
-            };
-
-            if (task.HasCustomColor()) {
-                item["color"] = {
-                    {"foreground", ColorToJson(*task.GetForegroundColor())},
-                    {"background", ColorToJson(*task.GetBackgroundColor())}
+                json item = {
+                    {"id", task.GetId()},
+                    {"name", task.GetName()},
+                    {"elapsed_seconds", task.GetElapsedTime().count()},
+                    {"running", task.IsRunning()},
+                    {"completed", task.IsCompleted()},
+                    {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0}
                 };
-            }
-            (*section)["tasks"].push_back(std::move(item));
-        }
 
-        std::ofstream output(path);
-        if (!output) {
-            errorMessage = "Could not open JSON file for writing: " + jsonFilePath_;
-            return false;
-        }
-        output << root.dump(4) << '\n';
-        errorMessage.clear();
-        lastPeriodicSave_ = std::chrono::steady_clock::now();
-        return true;
-    } catch (const std::exception& exception) {
-        errorMessage = exception.what();
-        return false;
-    }
+                if (task.HasCustomColor()) {
+                    item["color"] = {
+                        {"foreground", ColorToJson(*task.GetForegroundColor())},
+                        {"background", ColorToJson(*task.GetBackgroundColor())}
+                    };
+                }
+                (*section)["tasks"].push_back(std::move(item));
+            }
+
+            mutationError.clear();
+            return true;
+        },
+        errorMessage
+    );
+
+    if (saved) lastPeriodicSave_ = std::chrono::steady_clock::now();
+    return saved;
 }
 
 bool TaskManager::Load(std::string& errorMessage) {
     try {
         const std::filesystem::path path(jsonFilePath_);
-        if (!std::filesystem::exists(path)) {
+        json root;
+        bool exists = false;
+        if (!SentinelShared::JsonDataStore::Read(path, root, exists, errorMessage)) {
+            return false;
+        }
+
+        if (!exists) {
             tasks_.clear();
             definedColors_.clear();
             autoSaveInterval_ = std::chrono::seconds(1);
             return SaveNow(errorMessage);
         }
 
-        std::ifstream input(path);
-        if (!input) {
-            errorMessage = "Could not open JSON file for reading: " + jsonFilePath_;
-            return false;
-        }
-
-        json root;
-        input >> root;
-        if (!root.is_object()) {
-            errorMessage = "JSON root must be an object.";
-            return false;
-        }
-
         const json& data = *SentinelSectionForRead(root);
-        if (!data.contains("tasks") || !data["tasks"].is_array()) {
-            errorMessage = "JSON file does not contain a Sentinel tasks array.";
+        if (!data.contains("tasks")) {
+            // A shared file may legitimately exist before Sentinel has written
+            // its own section. Initialize Sentinel without disturbing the rest.
+            tasks_.clear();
+            definedColors_.clear();
+            autoSaveInterval_ = std::chrono::seconds(1);
+            return SaveNow(errorMessage);
+        }
+        if (!data["tasks"].is_array()) {
+            errorMessage = "JSON file does not contain a valid Sentinel tasks array.";
             return false;
         }
 
