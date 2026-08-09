@@ -1,4 +1,5 @@
 #include "CommandProcessor.hpp"
+#include "DurationParser.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -17,6 +18,7 @@ const std::vector<std::string> CommandLines{
     "search <fuzzy text>                          Show fuzzy-matched tasks",
     "list                                         Show all tasks",
     "commands                                     Show all commands",
+    "autoSave <duration>                          Set autosave interval, e.g. 20s / 10m 30s",
     "setJsonFile <path.json>                      Switch active JSON data file",
     "defineColor <id> rgb(r,g,b)                  Define/update a named color",
     "color <fg> bg <bg>                           Set default task-row colors",
@@ -102,7 +104,7 @@ std::optional<RgbColor> CommandProcessor::ResolveColorValue(const std::string& v
 
 void CommandProcessor::Autosave() {
     std::string error;
-    if (!manager_.Save(error)) status_ += " | Autosave failed: " + error;
+    if (!manager_.SaveNow(error)) status_ += " | Autosave failed: " + error;
 }
 
 bool CommandProcessor::ParseDefineColorCommand(const std::string& argument) {
@@ -155,10 +157,29 @@ void CommandProcessor::Execute(const std::string& line) {
     searchResults_.reset();
     infoLines_.clear();
     if (command.empty()) { status_.clear(); return; }
-    if (command == "quit" || command == "exit") { std::string error; manager_.Save(error); if (!error.empty()) status_ = "Save failed: " + error; quit_ = true; return; }
+    if (command == "quit" || command == "exit") { std::string error; manager_.SaveNow(error); if (!error.empty()) status_ = "Save failed: " + error; quit_ = true; return; }
     if (command == "commands") { infoLines_ = CommandLines; status_ = "Available Sentinel commands."; return; }
     if (command == "help") { status_ = "Type 'commands' to show every command and its syntax."; return; }
     if (command == "list") { status_ = "Showing all tasks."; return; }
+    if (command == "autoSave") {
+        if (argument.empty()) {
+            status_ = "Autosave interval: " + SentinelShared::FormatDuration(manager_.GetAutoSaveInterval());
+            return;
+        }
+        const auto interval = SentinelShared::ParseDuration(argument);
+        if (!interval) {
+            status_ = "Usage: autoSave <duration>, e.g. autoSave 20s | autoSave 1m | autoSave 10m 30s";
+            return;
+        }
+        manager_.SetAutoSaveInterval(*interval);
+        std::string error;
+        if (!manager_.SaveNow(error)) {
+            status_ = "Autosave interval changed, but persistence failed: " + error;
+            return;
+        }
+        status_ = "Autosave interval: " + SentinelShared::FormatDuration(*interval);
+        return;
+    }
     if (command == "setJsonFile") {
         const std::string path = Unquote(argument);
         if (path.empty()) { status_ = "Usage: setJsonFile <json_file_path.json>"; return; }
