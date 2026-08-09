@@ -2,6 +2,7 @@
 
 #include "FuzzySearch.hpp"
 #include "JsonDataStore.hpp"
+#include "SharedTaskWorld.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -47,25 +48,90 @@ SentinelShared::TimeFragment FragmentFromJson(const json& value) {
     return fragment;
 }
 
-const json* SentinelSectionForRead(const json& root) {
-    if (root.contains("sentinel") && root["sentinel"].is_object() &&
-        root["sentinel"].contains("tasks")) {
-        return &root["sentinel"];
+json TaskToJson(const Task& task) {
+    const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+        task.GetCompletionTime().time_since_epoch()
+    ).count();
+    const auto createdEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+        task.GetCreatedTime().time_since_epoch()
+    ).count();
+
+    json item = {
+        {"id", task.GetId()},
+        {"name", task.GetName()},
+        {"created_at_epoch", createdEpoch},
+        {"elapsed_seconds", task.GetElapsedTime().count()},
+        {"running", task.IsRunning()},
+        {"completed", task.IsCompleted()},
+        {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0},
+        {"time_fragments", json::array()}
+    };
+
+    for (const auto& fragment : task.GetTimeFragments()) {
+        item["time_fragments"].push_back(FragmentToJson(fragment));
     }
-    return &root;
+
+    if (task.HasCustomColor()) {
+        item["color"] = {
+            {"foreground", ColorToJson(*task.GetForegroundColor())},
+            {"background", ColorToJson(*task.GetBackgroundColor())}
+        };
+    }
+
+    return item;
 }
 
-json* SentinelSectionForWrite(json& root) {
-    if (root.contains("sentinel") && root["sentinel"].is_object()) {
-        return &root["sentinel"];
-    }
+bool TaskFromJson(const json& item, Task& task, std::string& errorMessage) {
+    try {
+        const auto elapsed = std::chrono::seconds(
+            item.value("elapsed_seconds", 0LL)
+        );
+        const bool completed = item.value("completed", false);
+        const bool running = item.value("running", false);
+        const auto createdEpoch = item.value("created_at_epoch", 0LL);
+        const auto completedEpoch = item.value("completed_at_epoch", 0LL);
 
-    if (root.contains("sentinelTasks") || root.contains("statistics") ||
-        root.contains("shared")) {
-        root["sentinel"] = json::object();
-        return &root["sentinel"];
+        std::vector<SentinelShared::TimeFragment> fragments;
+        if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
+            for (const auto& fragmentJson : item["time_fragments"]) {
+                if (fragmentJson.is_object()) {
+                    fragments.push_back(FragmentFromJson(fragmentJson));
+                }
+            }
+        }
+
+        task.Restore(
+            elapsed,
+            completed,
+            running,
+            SentinelShared::TimePointFromEpoch(createdEpoch),
+            SentinelShared::TimePointFromEpoch(completedEpoch),
+            std::move(fragments)
+        );
+
+        if (item.contains("color") && item["color"].is_object()) {
+            const auto& color = item["color"];
+            if (color.contains("foreground") && color.contains("background")) {
+                task.SetColor(
+                    ColorFromJson(color.at("foreground")),
+                    ColorFromJson(color.at("background"))
+                );
+            }
+        }
+
+        errorMessage.clear();
+        return true;
+    } catch (const std::exception& exception) {
+        errorMessage = "Invalid shared task: " + std::string(exception.what());
+        return false;
     }
-    return &root;
+}
+
+json& SentinelSettingsForWrite(json& root) {
+    if (!root.contains("sentinel") || !root["sentinel"].is_object()) {
+        root["sentinel"] = json::object();
+    }
+    return root["sentinel"];
 }
 
 } // namespace
@@ -182,46 +248,23 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
     const bool saved = SentinelShared::JsonDataStore::Update(
         path,
         [&](json& root, std::string& mutationError) {
-            json* section = SentinelSectionForWrite(root);
-            (*section)["version"] = 4;
-            (*section)["auto_save_seconds"] = autoSaveInterval_.count();
-            (*section)["defined_colors"] = json::object();
-            (*section)["tasks"] = json::array();
-
-            for (const auto& [id, color] : definedColors_) {
-                (*section)["defined_colors"][id] = ColorToJson(color);
+            if (!root.contains("sharedTasks") || !root["sharedTasks"].is_object()) {
+                root["sharedTasks"] = json::object();
+            }
+            auto& shared = root["sharedTasks"];
+            shared["version"] = SentinelShared::SharedTaskWorldVersion;
+            shared["tasks"] = json::array();
+            for (const Task& task : tasks_) {
+                shared["tasks"].push_back(TaskToJson(task));
             }
 
-            for (const Task& task : tasks_) {
-                const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-                    task.GetCompletionTime().time_since_epoch()
-                ).count();
-                const auto createdEpoch = std::chrono::duration_cast<std::chrono::seconds>(
-                    task.GetCreatedTime().time_since_epoch()
-                ).count();
-
-                json item = {
-                    {"id", task.GetId()},
-                    {"name", task.GetName()},
-                    {"created_at_epoch", createdEpoch},
-                    {"elapsed_seconds", task.GetElapsedTime().count()},
-                    {"running", task.IsRunning()},
-                    {"completed", task.IsCompleted()},
-                    {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0},
-                    {"time_fragments", json::array()}
-                };
-
-                for (const auto& fragment : task.GetTimeFragments()) {
-                    item["time_fragments"].push_back(FragmentToJson(fragment));
-                }
-
-                if (task.HasCustomColor()) {
-                    item["color"] = {
-                        {"foreground", ColorToJson(*task.GetForegroundColor())},
-                        {"background", ColorToJson(*task.GetBackgroundColor())}
-                    };
-                }
-                (*section)["tasks"].push_back(std::move(item));
+            auto& settings = SentinelSettingsForWrite(root);
+            settings["version"] = 5;
+            settings["auto_save_seconds"] = autoSaveInterval_.count();
+            settings["defined_colors"] = json::object();
+            settings.erase("tasks");
+            for (const auto& [id, color] : definedColors_) {
+                settings["defined_colors"][id] = ColorToJson(color);
             }
 
             mutationError.clear();
@@ -237,100 +280,80 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
 bool TaskManager::Load(std::string& errorMessage) {
     try {
         const std::filesystem::path path(jsonFilePath_);
+
+        bool purgedLegacyWorld = false;
+        if (!SentinelShared::EnsureSharedTaskWorld(
+                path,
+                purgedLegacyWorld,
+                errorMessage)) {
+            return false;
+        }
+
         json root;
         bool exists = false;
         if (!SentinelShared::JsonDataStore::Read(path, root, exists, errorMessage)) {
             return false;
         }
-
-        if (!exists) {
-            tasks_.clear();
-            definedColors_.clear();
-            autoSaveInterval_ = std::chrono::seconds(1);
-            return SaveNow(errorMessage);
-        }
-
-        const json& data = *SentinelSectionForRead(root);
-        if (!data.contains("tasks")) {
-            tasks_.clear();
-            definedColors_.clear();
-            autoSaveInterval_ = std::chrono::seconds(1);
-            return SaveNow(errorMessage);
-        }
-        if (!data["tasks"].is_array()) {
-            errorMessage = "JSON file does not contain a valid Sentinel tasks array.";
+        if (!exists || !root.contains("sharedTasks") ||
+            !root["sharedTasks"].is_object() ||
+            !root["sharedTasks"].contains("tasks") ||
+            !root["sharedTasks"]["tasks"].is_array()) {
+            errorMessage = "Shared task world is missing or invalid.";
             return false;
         }
 
         std::vector<Task> loaded;
-        std::unordered_map<std::string, RgbColor> loadedColors;
-        const auto loadedAutoSaveSeconds = std::max(
-            1LL,
-            data.value("auto_save_seconds", 1LL)
-        );
+        const auto& sharedTasks = root["sharedTasks"]["tasks"];
+        loaded.reserve(sharedTasks.size());
 
-        if (data.contains("defined_colors") && data["defined_colors"].is_object()) {
-            for (auto iterator = data["defined_colors"].begin();
-                 iterator != data["defined_colors"].end(); ++iterator) {
-                loadedColors[iterator.key()] = ColorFromJson(iterator.value());
+        for (const auto& item : sharedTasks) {
+            if (!item.is_object()) continue;
+            const std::string id = item.value("id", std::string{});
+            const std::string name = item.value("name", id);
+            if (id.empty() || name.empty()) {
+                errorMessage = "Shared tasks require non-empty id and name.";
+                return false;
             }
-        }
-
-        std::size_t legacyIndex = 0;
-        for (const auto& item : data["tasks"]) {
-            const std::string id = item.value("id", std::to_string(legacyIndex++));
             if (std::any_of(
                     loaded.begin(), loaded.end(),
                     [&](const Task& task) { return task.GetId() == id; })) {
-                errorMessage = "Duplicate task ID in JSON: " + id;
+                errorMessage = "Duplicate global task ID: " + id;
                 return false;
             }
 
-            Task task(id, item.at("name").get<std::string>());
-            const auto elapsed = std::chrono::seconds(
-                item.value("elapsed_seconds", 0LL)
-            );
-            const bool completed = item.value("completed", false);
-            const bool running = item.value("running", false);
-            const auto createdEpoch = item.value("created_at_epoch", 0LL);
-            const auto completedEpoch = item.value("completed_at_epoch", 0LL);
-
-            std::vector<SentinelShared::TimeFragment> fragments;
-            if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
-                for (const auto& fragmentJson : item["time_fragments"]) {
-                    if (fragmentJson.is_object()) {
-                        fragments.push_back(FragmentFromJson(fragmentJson));
-                    }
-                }
-            }
-
-            task.Restore(
-                elapsed,
-                completed,
-                running,
-                SentinelShared::TimePointFromEpoch(createdEpoch),
-                SentinelShared::TimePointFromEpoch(completedEpoch),
-                std::move(fragments)
-            );
-
-            if (item.contains("color")) {
-                const auto& color = item["color"];
-                task.SetColor(
-                    ColorFromJson(color.at("foreground")),
-                    ColorFromJson(color.at("background"))
-                );
+            Task task(id, name);
+            std::string taskError;
+            if (!TaskFromJson(item, task, taskError)) {
+                errorMessage = taskError;
+                return false;
             }
             loaded.push_back(std::move(task));
         }
 
+        std::unordered_map<std::string, RgbColor> loadedColors;
+        std::chrono::seconds loadedAutoSaveInterval{1};
+        if (root.contains("sentinel") && root["sentinel"].is_object()) {
+            const auto& settings = root["sentinel"];
+            loadedAutoSaveInterval = std::chrono::seconds(
+                std::max(1LL, settings.value("auto_save_seconds", 1LL))
+            );
+            if (settings.contains("defined_colors") && settings["defined_colors"].is_object()) {
+                for (auto iterator = settings["defined_colors"].begin();
+                     iterator != settings["defined_colors"].end(); ++iterator) {
+                    loadedColors[iterator.key()] = ColorFromJson(iterator.value());
+                }
+            }
+        }
+
         tasks_ = std::move(loaded);
         definedColors_ = std::move(loadedColors);
-        autoSaveInterval_ = std::chrono::seconds(loadedAutoSaveSeconds);
+        autoSaveInterval_ = loadedAutoSaveInterval;
         lastPeriodicSave_ = std::chrono::steady_clock::now();
         errorMessage.clear();
+        (void)purgedLegacyWorld;
         return true;
     } catch (const std::exception& exception) {
-        errorMessage = "Failed to load JSON: " + std::string(exception.what());
+        errorMessage = "Failed to load shared task world: " + std::string(exception.what());
         return false;
     }
 }
