@@ -49,6 +49,7 @@ private:
     DisplaySettings displaySettings_;
     CommandProcessor commandProcessor_;
     std::string commandBuffer_;
+    std::size_t cursorPosition_{0};
     std::string persistenceStatus_;
     std::vector<std::string> commandHistory_;
     std::optional<std::size_t> historyIndex_;
