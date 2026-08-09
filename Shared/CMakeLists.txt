@@ -26,4 +26,11 @@ if(BUILD_TESTING)
     target_link_libraries(SentinelSharedConcurrencyTest PRIVATE SentinelShared)
     add_test(NAME SentinelShared.ConcurrentJsonTransactions
              COMMAND SentinelSharedConcurrencyTest)
+
+    add_executable(SentinelSharedTaskWorldMigrationTest
+        tests/SharedTaskWorldMigrationTest.cpp
+    )
+    target_link_libraries(SentinelSharedTaskWorldMigrationTest PRIVATE SentinelShared)
+    add_test(NAME SentinelShared.SharedTaskWorldMigration
+             COMMAND SentinelSharedTaskWorldMigrationTest)
 endif()
