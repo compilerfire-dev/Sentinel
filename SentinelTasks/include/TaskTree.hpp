@@ -34,6 +34,7 @@ struct TaskNode {
     void Start();
     void Stop();
     void Complete();
+    void Unset();
     std::chrono::seconds Elapsed() const;
     std::string ElapsedString() const;
     std::string CompletionString() const;
@@ -63,6 +64,7 @@ public:
     bool StartTask(const std::string& id, std::string& errorMessage);
     bool StopTask(const std::string& id, std::string& errorMessage);
     bool CompleteTask(const std::string& id, std::string& errorMessage);
+    bool UnsetTask(const std::string& id, std::string& errorMessage);
 
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
