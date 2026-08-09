@@ -3,22 +3,10 @@
 #include <algorithm>
 #include <utility>
 
-namespace {
-
-const std::vector<std::string> Emojis{
-    "🔘", "🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "⚫️", "⚪️", "🟤",
-    "🔺", "🔻", "🔸", "🔹", "🔶", "🔷", "🔳", "🔲", "▪️", "▫️",
-    "◾️", "◽️", "◼️", "◻️", "🟥", "🟧", "🟨", "🟩", "🟦", "🟪",
-    "⬛️", "⬜️", "🟫"
-};
-
-} // namespace
-
 bool TaskTree::AddNode(
     NodeKind kind,
     std::string id,
     std::string parentId,
-    std::string emoji,
     std::string name,
     std::string& errorMessage
 ) {
@@ -32,10 +20,6 @@ bool TaskTree::AddNode(
     }
     if (nodes_.contains(id)) {
         errorMessage = "Node ID already exists: " + id;
-        return false;
-    }
-    if (!IsAllowedEmoji(emoji)) {
-        errorMessage = "Emoji is not in the SentinelTasks allowed emoji set.";
         return false;
     }
 
@@ -57,18 +41,14 @@ bool TaskTree::AddNode(
     TaskNode node;
     node.id = std::move(id);
     node.name = std::move(name);
-    node.emoji = std::move(emoji);
     node.parentId = parentId;
     node.kind = kind;
 
     const std::string newId = node.id;
     nodes_.emplace(newId, std::move(node));
 
-    if (parentId.empty()) {
-        rootIds_.push_back(newId);
-    } else {
-        nodes_.at(parentId).children.push_back(newId);
-    }
+    if (parentId.empty()) rootIds_.push_back(newId);
+    else nodes_.at(parentId).children.push_back(newId);
 
     errorMessage.clear();
     return true;
@@ -87,10 +67,7 @@ bool TaskTree::RemoveNode(const std::string& id, std::string& errorMessage) {
 
     auto& siblings = parentId.empty() ? rootIds_ : nodes_.at(parentId).children;
     siblings.erase(std::remove(siblings.begin(), siblings.end(), id), siblings.end());
-
-    for (const auto& subtreeId : subtree) {
-        nodes_.erase(subtreeId);
-    }
+    for (const auto& subtreeId : subtree) nodes_.erase(subtreeId);
 
     errorMessage.clear();
     return true;
@@ -107,29 +84,14 @@ bool TaskTree::SetDescription(const std::string& id, std::string description, st
     return true;
 }
 
-bool TaskTree::SetEmoji(const std::string& id, std::string emoji, std::string& errorMessage) {
-    TaskNode* node = GetNode(id);
-    if (!node) {
-        errorMessage = "Node ID does not exist: " + id;
-        return false;
-    }
-    if (!IsAllowedEmoji(emoji)) {
-        errorMessage = "Emoji is not in the SentinelTasks allowed emoji set.";
-        return false;
-    }
-    node->emoji = std::move(emoji);
-    errorMessage.clear();
-    return true;
-}
-
 TaskNode* TaskTree::GetNode(const std::string& id) {
-    const auto iterator = nodes_.find(id);
-    return iterator == nodes_.end() ? nullptr : &iterator->second;
+    const auto it = nodes_.find(id);
+    return it == nodes_.end() ? nullptr : &it->second;
 }
 
 const TaskNode* TaskTree::GetNode(const std::string& id) const {
-    const auto iterator = nodes_.find(id);
-    return iterator == nodes_.end() ? nullptr : &iterator->second;
+    const auto it = nodes_.find(id);
+    return it == nodes_.end() ? nullptr : &it->second;
 }
 
 std::vector<VisibleTreeNode> TaskTree::Flatten() const {
@@ -144,24 +106,19 @@ void TaskTree::FlattenChildren(
     std::size_t depth,
     std::vector<VisibleTreeNode>& output
 ) const {
-    for (std::size_t index = 0; index < ids.size(); ++index) {
-        const bool last = index + 1 == ids.size();
-        const TaskNode* node = GetNode(ids[index]);
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+        const bool last = i + 1 == ids.size();
+        const TaskNode* node = GetNode(ids[i]);
         if (!node) continue;
-
-        output.push_back({node, prefix + (last ? "└─ " : "├─ "), depth});
-
-        const std::string childPrefix = prefix + (last ? "   " : "│  ");
-        FlattenChildren(node->children, childPrefix, depth + 1, output);
+        output.push_back({node, prefix + (last ? "`- " : "+- "), depth});
+        FlattenChildren(node->children, prefix + (last ? "   " : "|  "), depth + 1, output);
     }
 }
 
 void TaskTree::CollectSubtreeIds(const std::string& id, std::vector<std::string>& output) const {
     const TaskNode* node = GetNode(id);
     if (!node) return;
-    for (const auto& child : node->children) {
-        CollectSubtreeIds(child, output);
-    }
+    for (const auto& child : node->children) CollectSubtreeIds(child, output);
     output.push_back(id);
 }
 
@@ -179,12 +136,4 @@ std::optional<std::string> TaskTree::FirstChildOf(const std::string& id) const {
 
 bool TaskTree::Empty() const noexcept {
     return nodes_.empty();
-}
-
-bool TaskTree::IsAllowedEmoji(const std::string& emoji) {
-    return std::find(Emojis.begin(), Emojis.end(), emoji) != Emojis.end();
-}
-
-const std::vector<std::string>& TaskTree::AllowedEmojis() {
-    return Emojis;
 }
