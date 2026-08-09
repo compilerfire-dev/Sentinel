@@ -1,24 +1,28 @@
 #include "CommandProcessor.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <regex>
+#include <unordered_map>
 
 namespace {
 
 const std::vector<std::string> CommandLines{
-    "add <id> <name>                         Add a task with a user-defined ID",
-    "add \"id\" \"name\"                   Quoted ID/name form",
-    "remove <id | fuzzy name>                Remove a task",
-    "start <id | fuzzy name>                 Start or resume a task",
-    "stop <id | fuzzy name>                  Stop a running task",
-    "done <id | fuzzy name>                  Complete a task",
-    "search <fuzzy text>                     Show fuzzy-matched tasks",
-    "list                                    Show all tasks",
-    "commands                                Show all commands",
-    "setJsonFile <path.json>                 Switch active JSON data file",
-    "color rgb(r,g,b) bg rgb(r,g,b)         Set default task-row colors",
-    "color <id> rgb(r,g,b) bg rgb(r,g,b)    Set colors for one task",
-    "help                                    Show short help",
-    "quit                                    Save and exit Sentinel"
+    "add <id> <name>                              Add a task with a user-defined ID",
+    "add \"id\" \"name\"                        Quoted ID/name form",
+    "remove <id | fuzzy name>                     Remove a task",
+    "start <id | fuzzy name>                      Start or resume a task",
+    "stop <id | fuzzy name>                       Stop a running task",
+    "done <id | fuzzy name>                       Complete a task",
+    "search <fuzzy text>                          Show fuzzy-matched tasks",
+    "list                                         Show all tasks",
+    "commands                                     Show all commands",
+    "setJsonFile <path.json>                      Switch active JSON data file",
+    "defineColor <id> rgb(r,g,b)                  Define/update a named color",
+    "color <fg> bg <bg>                           Set default task-row colors",
+    "color <task-id> <fg> bg <bg>                 Set colors for one task",
+    "help                                         Show short help",
+    "quit                                         Save and exit Sentinel"
 };
 
 std::string Trim(std::string value) {
@@ -36,6 +40,17 @@ std::string Unquote(std::string value) {
     return value;
 }
 
+std::string NormalizeColorName(std::string value) {
+    std::string result;
+    result.reserve(value.size());
+    for (const unsigned char character : value) {
+        if (std::isalnum(character)) {
+            result.push_back(static_cast<char>(std::tolower(character)));
+        }
+    }
+    return result;
+}
+
 bool ParseAddArguments(const std::string& argument, std::string& id, std::string& name) {
     static const std::regex pattern(R"re(^\s*(?:"([^"]+)"|(\S+))\s+(?:"([^"]+)"|(.+?))\s*$)re");
     std::smatch match;
@@ -45,16 +60,43 @@ bool ParseAddArguments(const std::string& argument, std::string& id, std::string
     return !id.empty() && !name.empty();
 }
 
-bool ParseRgbValues(const std::smatch& match, int offset, RgbColor& foreground, RgbColor& background) {
-    int values[6]{};
-    for (int index = 0; index < 6; ++index) {
-        values[index] = std::stoi(match[offset + index].str());
-        if (values[index] < 0 || values[index] > 255) return false;
-    }
-    foreground = {values[0], values[1], values[2]};
-    background = {values[3], values[4], values[5]};
-    return true;
+std::optional<RgbColor> ParseRgbExpression(const std::string& value) {
+    static const std::regex rgbPattern(
+        R"re(^\s*(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)re",
+        std::regex::icase
+    );
+
+    std::smatch match;
+    if (!std::regex_match(value, match, rgbPattern)) return std::nullopt;
+
+    const int red = std::stoi(match[1].str());
+    const int green = std::stoi(match[2].str());
+    const int blue = std::stoi(match[3].str());
+    if (red > 255 || green > 255 || blue > 255) return std::nullopt;
+
+    return RgbColor{red, green, blue};
 }
+
+const std::unordered_map<std::string, RgbColor> BuiltInColors{
+    {"black", {0, 0, 0}},
+    {"red", {205, 49, 49}},
+    {"green", {13, 188, 121}},
+    {"yellow", {229, 229, 16}},
+    {"blue", {36, 114, 200}},
+    {"magenta", {188, 63, 188}},
+    {"cyan", {17, 168, 205}},
+    {"white", {229, 229, 229}},
+    {"brightblack", {102, 102, 102}},
+    {"gray", {102, 102, 102}},
+    {"grey", {102, 102, 102}},
+    {"brightred", {241, 76, 76}},
+    {"brightgreen", {35, 209, 139}},
+    {"brightyellow", {245, 245, 67}},
+    {"brightblue", {59, 142, 234}},
+    {"brightmagenta", {214, 112, 214}},
+    {"brightcyan", {41, 184, 219}},
+    {"brightwhite", {255, 255, 255}}
+};
 
 } // namespace
 
@@ -76,32 +118,72 @@ std::optional<std::size_t> CommandProcessor::ResolveTaskReference(const std::str
     return fuzzyIndex;
 }
 
+std::optional<RgbColor> CommandProcessor::ResolveColorValue(const std::string& value) const {
+    const std::string name = Unquote(value);
+
+    if (const auto custom = manager_.GetDefinedColor(name)) {
+        return custom;
+    }
+
+    const auto builtIn = BuiltInColors.find(NormalizeColorName(name));
+    if (builtIn != BuiltInColors.end()) {
+        return builtIn->second;
+    }
+
+    return ParseRgbExpression(name);
+}
+
 void CommandProcessor::Autosave() {
     std::string error;
     if (!manager_.Save(error)) status_ += " | Autosave failed: " + error;
 }
 
-bool CommandProcessor::ParseColorCommand(const std::string& argument) {
-    static const std::regex defaultPattern(
-        R"re(^\s*(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)re",
-        std::regex::icase
-    );
-    static const std::regex taskPattern(
-        R"re(^\s*(?:"([^"]+)"|(\S+))\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s+bg\s+(?:rgb|rpg)\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)\s*$)re",
+bool CommandProcessor::ParseDefineColorCommand(const std::string& argument) {
+    static const std::regex pattern(
+        R"re(^\s*(?:"([^"]+)"|(\S+))\s+((?:rgb|rpg)\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))\s*$)re",
         std::regex::icase
     );
 
     std::smatch match;
-    RgbColor foreground;
-    RgbColor background;
+    if (!std::regex_match(argument, match, pattern)) {
+        status_ = "Usage: defineColor <id> rgb(r,g,b)";
+        return false;
+    }
+
+    const std::string id = match[1].matched ? match[1].str() : match[2].str();
+    const auto color = ParseRgbExpression(match[3].str());
+    if (!color) {
+        status_ = "RGB channels must be between 0 and 255.";
+        return false;
+    }
+
+    manager_.DefineColor(id, *color);
+    status_ = "Color defined: " + id;
+    Autosave();
+    return true;
+}
+
+bool CommandProcessor::ParseColorCommand(const std::string& argument) {
+    static const std::regex defaultPattern(
+        R"re(^\s*((?:(?:rgb|rpg)\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))|(?:"[^"]+")|(?:\S+))\s+bg\s+((?:(?:rgb|rpg)\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))|(?:"[^"]+")|(?:\S+))\s*$)re",
+        std::regex::icase
+    );
+    static const std::regex taskPattern(
+        R"re(^\s*(?:"([^"]+)"|(\S+))\s+((?:(?:rgb|rpg)\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))|(?:"[^"]+")|(?:\S+))\s+bg\s+((?:(?:rgb|rpg)\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\))|(?:"[^"]+")|(?:\S+))\s*$)re",
+        std::regex::icase
+    );
+
+    std::smatch match;
 
     if (std::regex_match(argument, match, defaultPattern)) {
-        if (!ParseRgbValues(match, 1, foreground, background)) {
-            status_ = "RGB channels must be between 0 and 255.";
+        const auto foreground = ResolveColorValue(match[1].str());
+        const auto background = ResolveColorValue(match[2].str());
+        if (!foreground || !background) {
+            status_ = "Unknown color. Use a built-in name, defineColor ID, or rgb(r,g,b).";
             return false;
         }
-        displaySettings_.foreground = foreground;
-        displaySettings_.background = background;
+        displaySettings_.foreground = *foreground;
+        displaySettings_.background = *background;
         displaySettings_.dirty = true;
         status_ = "Default task colors updated.";
         return true;
@@ -109,22 +191,25 @@ bool CommandProcessor::ParseColorCommand(const std::string& argument) {
 
     if (std::regex_match(argument, match, taskPattern)) {
         const std::string id = match[1].matched ? match[1].str() : match[2].str();
-        if (!ParseRgbValues(match, 3, foreground, background)) {
-            status_ = "RGB channels must be between 0 and 255.";
+        const auto foreground = ResolveColorValue(match[3].str());
+        const auto background = ResolveColorValue(match[4].str());
+        if (!foreground || !background) {
+            status_ = "Unknown color. Use a built-in name, defineColor ID, or rgb(r,g,b).";
             return false;
         }
+
         Task* task = manager_.GetTaskById(id);
         if (!task) {
             status_ = "Task ID does not exist: " + id;
             return false;
         }
-        task->SetColor(foreground, background);
+        task->SetColor(*foreground, *background);
         status_ = "Task colors updated: " + id;
         Autosave();
         return true;
     }
 
-    status_ = "Usage: color [\"id\"] rgb(r,g,b) bg rgb(r,g,b)";
+    status_ = "Usage: color [\"task-id\"] <fg-name|rgb> bg <bg-name|rgb>";
     return false;
 }
 
@@ -162,6 +247,10 @@ void CommandProcessor::Execute(const std::string& line) {
         if (path.empty()) { status_ = "Usage: setJsonFile <json_file_path.json>"; return; }
         std::string error;
         status_ = manager_.SetJsonFile(path, error) ? "JSON data file: " + manager_.GetJsonFile() : "Could not switch JSON file: " + error;
+        return;
+    }
+    if (command == "defineColor") {
+        ParseDefineColorCommand(argument);
         return;
     }
     if (command == "color") {
