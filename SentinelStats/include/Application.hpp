@@ -16,6 +16,7 @@ private:
     static void OnOpenClicked(GtkButton* button, gpointer userData);
     static void OnReloadClicked(GtkButton* button, gpointer userData);
     static gboolean OnTasksDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
+    static gboolean OnFragmentsDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
     static gboolean OnLocDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
 
     void BuildWindow(GtkApplication* app);
@@ -25,7 +26,8 @@ private:
     void RefreshLabels();
     void QueueCharts();
 
-    void DrawCompletedTasks(GtkWidget* widget, cairo_t* cr) const;
+    void DrawTaskProgression(GtkWidget* widget, cairo_t* cr) const;
+    void DrawTaskFragments(GtkWidget* widget, cairo_t* cr) const;
     void DrawProjectLoc(GtkWidget* widget, cairo_t* cr) const;
 
     StatisticsData data_;
@@ -37,7 +39,9 @@ private:
     GtkWidget* totalTasksLabel_{nullptr};
     GtkWidget* completedTasksLabel_{nullptr};
     GtkWidget* trackedTimeLabel_{nullptr};
+    GtkWidget* fragmentsLabel_{nullptr};
     GtkWidget* projectCountLabel_{nullptr};
     GtkWidget* tasksDrawingArea_{nullptr};
+    GtkWidget* fragmentsDrawingArea_{nullptr};
     GtkWidget* locDrawingArea_{nullptr};
 };
