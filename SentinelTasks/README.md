@@ -18,6 +18,8 @@ SentinelTasks is the tree-oriented terminal companion to Sentinel. The task tree
 addFolder <id> <parent|root> <name>
 addTask <id> <parent|root> <name>
 remove <id>
+setDescription
+setDescription <id>
 setDescription <id> <description>
 start <task-id>
 stop <task-id>
@@ -34,6 +36,57 @@ quit
 ```
 
 Names, descriptions, IDs, and custom color names can be enclosed in double quotes when they contain spaces.
+
+## Embedded description editor
+
+`setDescription` is integrated directly into the right-side `Description / Timing` pane rather than using the generic argument popup.
+
+```text
+setDescription
+```
+
+edits the currently selected node. You can also select a node and immediately edit it with:
+
+```text
+setDescription opengl
+```
+
+The right side becomes an editor while the tree remains visible:
+
+```text
+Description / Timing [EDITING]
+--------------------------------
+ID: opengl
+Type: task
+Timer: 00:42:17   State: running
+Completed: -
+Study OpenGL
+
+Read the rendering chapter and implement the examples.
+^ cursor is inside this pane
+```
+
+Editor controls:
+
+```text
+Typing       insert text at the cursor
+Enter        insert a newline
+Left/Right   move the text cursor
+Home/End     move to start/end of the current logical line
+Backspace    delete before the cursor
+Delete       delete at the cursor when supported by the terminal
+Mouse        place the cursor inside the description area
+F2           save the description and return to normal mode
+Esc          cancel edits and restore the previous description
+```
+
+The bottom command line is inactive while the editor is open and shows the current edit mode instead.
+
+For scripts or fast one-line changes, direct command-line assignment remains available:
+
+```text
+setDescription opengl "Read the rendering chapter and implement the examples."
+```
 
 ## Task timers
 
@@ -68,49 +121,20 @@ Use:
 showTimes
 ```
 
-to display every task ID with its current timer, state, and completion timestamp, for example:
-
-```text
-opengl  00:42:17  [running]  completed: -
-math    01:13:02  [done]     completed: 2026-08-09 16:40
-```
-
-Running timers update live because the ncurses loop refreshes continuously.
+to display every task ID with its current timer, state, and completion timestamp.
 
 ## Folder and task colors
 
 `color` affects tree rows only. The command prompt, command suggestions, dialogs, status line, and description pane remain in the terminal's normal colors.
 
-Set the default tree-row foreground/background:
-
 ```text
 color white bg black
-color brightGreen bg black
-color rgb(230,230,230) bg rgb(20,20,20)
-```
-
-Override one folder or task by its ID:
-
-```text
 color work brightBlue bg black
 color opengl green bg black
 color "project alpha" rgb(255,210,120) bg rgb(30,30,30)
 ```
 
-SentinelTasks provides the same built-in color family as Sentinel:
-
-```text
-black red green yellow blue magenta cyan white
-brightBlack gray grey
-brightRed brightGreen brightYellow brightBlue
-brightMagenta brightCyan brightWhite
-```
-
-Capitalization and separators in built-in names are normalized, so forms such as `brightBlue`, `bright-blue`, and `bright_blue` resolve equivalently.
-
-### Custom named colors
-
-Define a reusable color with:
+Define reusable colors with:
 
 ```text
 defineColor focus rgb(60,180,255)
@@ -118,29 +142,17 @@ defineColor warning rgb(255,160,40)
 defineColor "deep blue" rgb(25,50,120)
 ```
 
-Then use it anywhere a color value is accepted:
-
-```text
-color work focus bg black
-color opengl warning bg black
-color "project alpha" "deep blue" bg white
-```
-
-Each RGB channel must be between 0 and 255. RGB values are mapped to the nearest color exposed by the current ncurses terminal palette, matching Sentinel's portable color behavior.
+SentinelTasks also provides the built-in color family used by Sentinel.
 
 ## GUI-style argument windows
 
-Entering an argument-taking command by itself opens its ncurses argument window.
+Other argument-taking commands can still open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `select`, and `manualSelect` use node drop-lists. `start`, `stop`, and `done` use task-only drop-lists. `defineColor` and `color` provide their color controls.
 
-`addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `select`, and `manualSelect` use an existing-node drop-list. `setDescription` uses a node drop-list and description text input.
-
-`start`, `stop`, and `done` open a task-only drop-list. `defineColor` opens a color-name field plus an RGB text field. `color` opens a target drop-list (`default` plus existing node IDs) and foreground/background drop-lists populated from the built-in and currently defined named colors.
-
-Inline CLI arguments remain supported.
+`setDescription` is the exception: it uses the embedded right-pane editor described above.
 
 ## Controls
 
-Outside manual selection and argument windows:
+Outside manual selection, the description editor, and argument windows:
 
 ```text
 Tab        accept command suggestion
@@ -153,8 +165,6 @@ Backspace  delete before cursor
 ```
 
 Manual selection uses Up/Down for nodes, Left for parent, Right for first child, mouse click for selection, and Enter/Esc to finish.
-
-Argument windows use Tab to move between controls, Up/Down for drop-list choices, Enter to advance/activate, F2 to submit, Esc to cancel, and Backspace/Left/Right for text editing.
 
 ## Build
 
