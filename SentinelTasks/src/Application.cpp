@@ -1,4 +1,5 @@
 #include "Application.hpp"
+#include "DurationParser.hpp"
 #include "NativeFileDialog.hpp"
 
 #include <algorithm>
@@ -15,11 +16,12 @@ namespace {
 
 struct CommandDefinition { std::string_view name; std::string_view description; };
 
-constexpr std::array<CommandDefinition, 16> Commands{{
+constexpr std::array<CommandDefinition, 17> Commands{{
     {"addFolder", "add a folder node"}, {"addTask", "add an individual task"},
     {"remove", "remove a node and its subtree"}, {"setDescription", "edit a node description in right pane"},
     {"start", "start/resume a task timer"}, {"stop", "stop a task timer"},
     {"done", "complete a task and stop timer"}, {"showTimes", "show timers for all task IDs"},
+    {"autoSave", "set autosave interval, e.g. 20s or 10m 30s"},
     {"setJsonFile", "choose/switch active JSON data file"},
     {"defineColor", "define a named RGB color"}, {"color", "color default rows or one node"},
     {"manualSelect", "select nodes with arrows/mouse"}, {"select", "select a node from popup or by ID"},
@@ -41,6 +43,7 @@ const std::vector<std::string> CommandHelp{
     "stop <task-id>                                   Stop a running task timer",
     "done <task-id>                                   Complete a task and stop its timer",
     "showTimes                                        Show all task IDs and timers",
+    "autoSave <duration>                              Set autosave: 20s / 1m / 10m 30s",
     "setJsonFile                                      Open native JSON file chooser",
     "setJsonFile <path.json>                          Switch JSON file directly",
     "defineColor <name> rgb(r,g,b)                   Define/update a named color",
@@ -178,18 +181,18 @@ int Application::Run() {
 
 void Application::PeriodicAutosave() {
     const auto now = std::chrono::steady_clock::now();
-    if (now - lastAutosave_ < std::chrono::seconds(1)) return;
+    if (now - lastAutosave_ < autoSaveInterval_) return;
     lastAutosave_ = now;
 
     std::string error;
-    if (!dataStore_.Save(tree_, treeDisplaySettings_, definedColors_, error)) {
+    if (!dataStore_.Save(tree_, treeDisplaySettings_, definedColors_, autoSaveInterval_, error)) {
         status_ = "Autosave failed: " + error;
     }
 }
 
 bool Application::SaveCurrentData() {
     std::string error;
-    if (!dataStore_.Save(tree_, treeDisplaySettings_, definedColors_, error)) {
+    if (!dataStore_.Save(tree_, treeDisplaySettings_, definedColors_, autoSaveInterval_, error)) {
         status_ = "Save failed: " + error;
         return false;
     }
@@ -198,10 +201,11 @@ bool Application::SaveCurrentData() {
 
 bool Application::LoadCurrentData() {
     std::string error;
-    if (!dataStore_.Load(tree_, treeDisplaySettings_, definedColors_, error)) {
+    if (!dataStore_.Load(tree_, treeDisplaySettings_, definedColors_, autoSaveInterval_, error)) {
         status_ = "Load failed: " + error;
         return false;
     }
+    lastAutosave_ = std::chrono::steady_clock::now();
     selectedId_.clear();
     EnsureSelection();
     return true;
@@ -218,19 +222,22 @@ bool Application::SetJsonFile(const std::string& path) {
     const TaskTree previousTree = tree_;
     const TreeDisplaySettings previousDisplay = treeDisplaySettings_;
     const auto previousColors = definedColors_;
+    const auto previousAutoSaveInterval = autoSaveInterval_;
     const auto previousPath = dataStore_.Path();
 
     dataStore_.SetPath(path);
     std::string error;
-    if (!dataStore_.Load(tree_, treeDisplaySettings_, definedColors_, error)) {
+    if (!dataStore_.Load(tree_, treeDisplaySettings_, definedColors_, autoSaveInterval_, error)) {
         dataStore_.SetPath(previousPath);
         tree_ = previousTree;
         treeDisplaySettings_ = previousDisplay;
         definedColors_ = previousColors;
+        autoSaveInterval_ = previousAutoSaveInterval;
         status_ = "Could not switch JSON file: " + error;
         return false;
     }
 
+    lastAutosave_ = std::chrono::steady_clock::now();
     selectedId_.clear();
     EnsureSelection();
     infoLines_.clear();
@@ -309,6 +316,17 @@ void Application::ExecuteCommand(const std::string& line) {
         std::string error; status_=tree_.SetDescription(t[1],JoinTokens(t,2),error)?"Description updated: "+t[1]:error; return;
     }
 
+    if(c=="autoSave") {
+        if(t.size()==1){if(OpenCommandDialog(c))return;status_="Autosave interval: "+SentinelShared::FormatDuration(autoSaveInterval_);return;}
+        const auto interval=SentinelShared::ParseDuration(JoinTokens(t,1));
+        if(!interval){status_="Usage: autoSave <duration>, e.g. autoSave 20s | autoSave 1m | autoSave 10m 30s";return;}
+        autoSaveInterval_=*interval;
+        lastAutosave_=std::chrono::steady_clock::now();
+        if(!SaveCurrentData())return;
+        status_="Autosave interval: "+SentinelShared::FormatDuration(autoSaveInterval_);
+        return;
+    }
+
     if(c=="setJsonFile") {
         if(t.size()==1){OpenNativeJsonFilePicker();return;}
         if(t.size()==2){SetJsonFile(t[1]);return;}
@@ -383,7 +401,7 @@ void Application::ShowTimes(){infoLines_.clear();infoLines_.push_back("Task time
 
 void Application::Render(){erase();attr_set(A_NORMAL,0,nullptr);EnsureSelection();RenderHeader();RenderTree();RenderDescriptionPane();if(!manualSelect_&&!commandDialog_&&!descriptionEditing_)RenderSuggestions(BuildSuggestions());RenderStatus();RenderCommandLine();if(commandDialog_)RenderCommandDialog();refresh();}
 
-void Application::RenderHeader(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);(void)h;const std::string mode=descriptionEditing_?"DESCRIPTION EDIT":commandDialog_?"COMMAND ARGUMENT WINDOW":manualSelect_?"MANUAL SELECT":"Tree Task Planner";const std::string title="SentinelTasks | "+mode+" | "+dataStore_.Path().string();DrawClipped(0,0,std::max(0,w-1),title);if(w>1)mvhline(1,0,ACS_HLINE,w-1);}
+void Application::RenderHeader(){attr_set(A_NORMAL,0,nullptr);int h=0,w=0;getmaxyx(stdscr,h,w);(void)h;const std::string mode=descriptionEditing_?"DESCRIPTION EDIT":commandDialog_?"COMMAND ARGUMENT WINDOW":manualSelect_?"MANUAL SELECT":"Tree Task Planner";const std::string title="SentinelTasks | "+mode+" | "+dataStore_.Path().string()+" | autoSave "+SentinelShared::FormatDuration(autoSaveInterval_);DrawClipped(0,0,std::max(0,w-1),title);if(w>1)mvhline(1,0,ACS_HLINE,w-1);}
 
 void Application::RenderTree(){int h=0,w=0;getmaxyx(stdscr,h,w);const int divider=std::clamp(w*64/100,40,std::max(40,w-30));const int treeWidth=std::max(1,divider-2),last=std::max(2,h-3);visibleRowIds_.clear();if(!infoLines_.empty()){attr_set(A_NORMAL,0,nullptr);int row=2;for(const auto& l:infoLines_){if(row>=last)break;DrawClipped(row++,0,treeWidth,l);}return;}const auto visible=tree_.Flatten();int row=2;std::size_t vi=0;for(const auto& e:visible){if(row>=last||!e.node)break;const auto& n=*e.node;const bool selected=n.id==selectedId_;short pair=DefaultTreePair;if(has_colors()&&n.foregroundColor&&n.backgroundColor){const short candidate=static_cast<short>(FirstNodePair+vi);if(candidate>0&&candidate<COLOR_PAIRS&&InitializeColorPair(candidate,*n.foregroundColor,*n.backgroundColor))pair=candidate;}if(has_colors())attr_set(selected?A_REVERSE:A_NORMAL,pair,nullptr);else if(selected)attron(A_REVERSE);const std::string kind=n.kind==NodeKind::Folder?"[F] ":n.completed?"[x] ":n.running?"[>] ":"[T] ";DrawClipped(row,0,treeWidth,e.connectorPrefix+kind+n.name+"  {"+n.id+"}");attr_set(A_NORMAL,0,nullptr);visibleRowIds_.push_back(n.id);++row;++vi;}if(visible.empty())DrawClipped(3,0,treeWidth,"No nodes yet. Use addFolder or addTask.");}
 
@@ -409,7 +427,7 @@ void Application::SelectParent(){if(const auto p=tree_.ParentOf(selectedId_))sel
 void Application::SelectFirstChild(){if(const auto c=tree_.FirstChildOf(selectedId_))selectedId_=*c;}
 void Application::EnsureSelection(){if(!selectedId_.empty()&&tree_.GetNode(selectedId_))return;const auto v=tree_.Flatten();selectedId_=v.empty()?std::string{}:v.front().node->id;}
 
-bool Application::OpenCommandDialog(const std::string& command){CommandDialog d;d.command=command;d.title="Command: "+command;auto text=[](std::string label,std::string value={}){DialogField f;f.label=std::move(label);f.value=std::move(value);f.cursor=f.value.size();return f;};auto drop=[&](std::string label,std::vector<std::string> options,std::string preferred={}){DialogField f;f.label=std::move(label);f.kind=DialogFieldKind::DropList;f.options=std::move(options);f.selectedOption=FindOptionIndex(f.options,preferred).value_or(0);if(!f.options.empty())f.value=f.options[f.selectedOption];return f;};if(command=="setDescription"||command=="setJsonFile"||command=="manualSelect")return false;if(command=="addFolder"||command=="addTask"){d.fields.push_back(text("ID"));std::string parent="root";if(const auto* n=tree_.GetNode(selectedId_)){if(n->kind==NodeKind::Folder)parent=n->id;else if(!n->parentId.empty())parent=n->parentId;}d.fields.push_back(drop("Parent",NodeIdOptions(true,true),parent));d.fields.push_back(text("Name"));}else if(command=="remove"||command=="select")d.fields.push_back(drop("Node",NodeIdOptions(false,false),selectedId_));else if(command=="start"||command=="stop"||command=="done")d.fields.push_back(drop("Task",TaskIdOptions(),selectedId_));else if(command=="defineColor"){d.fields.push_back(text("Color name"));d.fields.push_back(text("RGB","rgb(255,255,255)"));}else if(command=="color"){auto targets=NodeIdOptions(false,false);targets.insert(targets.begin(),"default");d.fields.push_back(drop("Target",std::move(targets),selectedId_.empty()?"default":selectedId_));d.fields.push_back(drop("Foreground",ColorNameOptions(),"white"));d.fields.push_back(drop("Background",ColorNameOptions(),"black"));}else return false;commandDialog_=std::move(d);status_="Argument window opened for: "+command;return true;}
+bool Application::OpenCommandDialog(const std::string& command){CommandDialog d;d.command=command;d.title="Command: "+command;auto text=[](std::string label,std::string value={}){DialogField f;f.label=std::move(label);f.value=std::move(value);f.cursor=f.value.size();return f;};auto drop=[&](std::string label,std::vector<std::string> options,std::string preferred={}){DialogField f;f.label=std::move(label);f.kind=DialogFieldKind::DropList;f.options=std::move(options);f.selectedOption=FindOptionIndex(f.options,preferred).value_or(0);if(!f.options.empty())f.value=f.options[f.selectedOption];return f;};if(command=="setDescription"||command=="setJsonFile"||command=="manualSelect")return false;if(command=="autoSave")d.fields.push_back(text("Duration",SentinelShared::FormatDuration(autoSaveInterval_)));else if(command=="addFolder"||command=="addTask"){d.fields.push_back(text("ID"));std::string parent="root";if(const auto* n=tree_.GetNode(selectedId_)){if(n->kind==NodeKind::Folder)parent=n->id;else if(!n->parentId.empty())parent=n->parentId;}d.fields.push_back(drop("Parent",NodeIdOptions(true,true),parent));d.fields.push_back(text("Name"));}else if(command=="remove"||command=="select")d.fields.push_back(drop("Node",NodeIdOptions(false,false),selectedId_));else if(command=="start"||command=="stop"||command=="done")d.fields.push_back(drop("Task",TaskIdOptions(),selectedId_));else if(command=="defineColor"){d.fields.push_back(text("Color name"));d.fields.push_back(text("RGB","rgb(255,255,255)"));}else if(command=="color"){auto targets=NodeIdOptions(false,false);targets.insert(targets.begin(),"default");d.fields.push_back(drop("Target",std::move(targets),selectedId_.empty()?"default":selectedId_));d.fields.push_back(drop("Foreground",ColorNameOptions(),"white"));d.fields.push_back(drop("Background",ColorNameOptions(),"black"));}else return false;commandDialog_=std::move(d);status_="Argument window opened for: "+command;return true;}
 void Application::CloseCommandDialog(){commandDialog_.reset();curs_set(1);}
 void Application::HandleCommandDialogInput(int key){if(!commandDialog_)return;auto& d=*commandDialog_;if(key==27){CloseCommandDialog();return;}if(key==KEY_F(2)){SubmitCommandDialog();return;}if(key=='\t'){MoveDialogFocus(1);return;}
 #ifdef KEY_BTAB
