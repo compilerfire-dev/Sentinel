@@ -1,9 +1,10 @@
 #include "StatisticsData.hpp"
 
+#include "JsonDataStore.hpp"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <fstream>
 #include <map>
 
 using nlohmann::json;
@@ -115,17 +116,13 @@ void ReadProjects(const json& root, StatisticsSnapshot& snapshot) {
 } // namespace
 
 bool StatisticsData::Load(const std::filesystem::path& path, std::string& errorMessage) {
-    std::ifstream input(path);
-    if (!input) {
-        errorMessage = "Could not open JSON file: " + path.string();
+    json root;
+    bool exists = false;
+    if (!SentinelShared::JsonDataStore::Read(path, root, exists, errorMessage)) {
         return false;
     }
-
-    json root;
-    try {
-        input >> root;
-    } catch (const std::exception& exception) {
-        errorMessage = std::string("JSON parse error: ") + exception.what();
+    if (!exists) {
+        errorMessage = "Could not open JSON file: " + path.string();
         return false;
     }
 
