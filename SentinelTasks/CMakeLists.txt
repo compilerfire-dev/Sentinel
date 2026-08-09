@@ -2,6 +2,7 @@ add_executable(SentinelTasks
     main.cpp
     src/Application.cpp
     src/Legend.cpp
+    src/TaskDataStore.cpp
     src/TaskTree.cpp
 )
 
