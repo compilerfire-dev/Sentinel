@@ -30,6 +30,7 @@ constexpr std::array<CommandDefinition, 11> Commands{{
 }};
 
 constexpr std::size_t MaxSuggestions = 6;
+constexpr std::size_t MaxDropdownRows = 8;
 
 const std::vector<std::string> CommandHelp{
     "addFolder <id> <parent|root> <emoji> <name>     Add a folder/category node",
@@ -42,7 +43,16 @@ const std::vector<std::string> CommandHelp{
     "emojis                                           Show every allowed emoji marker",
     "commands                                         Show this command list",
     "list                                             Return to the tree view",
-    "quit                                             Exit SentinelTasks"
+    "quit                                             Exit SentinelTasks",
+    "",
+    "Tip: enter a command requiring arguments by itself to open its GUI-style argument window."
+};
+
+struct DialogRect {
+    int top{0};
+    int left{0};
+    int height{0};
+    int width{0};
 };
 
 bool IsUtf8Continuation(unsigned char value) {
@@ -82,8 +92,31 @@ std::vector<std::string> WrapText(const std::string& text, int width) {
     }
 
     if (!line.empty()) lines.push_back(line);
-    if (lines.empty() && !text.empty()) lines.push_back(text.substr(0, static_cast<std::size_t>(width)));
+    if (lines.empty() && !text.empty()) {
+        lines.push_back(text.substr(0, static_cast<std::size_t>(width)));
+    }
     return lines;
+}
+
+DialogRect CalculateDialogRect(std::size_t fieldCount) {
+    int screenHeight = 0;
+    int screenWidth = 0;
+    getmaxyx(stdscr, screenHeight, screenWidth);
+
+    DialogRect rect;
+    rect.width = std::clamp(screenWidth * 3 / 5, 54, std::max(54, screenWidth - 4));
+    rect.height = std::clamp(
+        9 + static_cast<int>(fieldCount) * 2,
+        11,
+        std::max(11, screenHeight - 4)
+    );
+    rect.left = std::max(0, (screenWidth - rect.width) / 2);
+    rect.top = std::max(0, (screenHeight - rect.height) / 2);
+    return rect;
+}
+
+int DialogFieldRow(const DialogRect& rect, std::size_t fieldIndex) {
+    return rect.top + 4 + static_cast<int>(fieldIndex) * 2;
 }
 
 } // namespace
@@ -111,6 +144,19 @@ int Application::Run() {
 void Application::HandleInput() {
     const int key = getch();
     if (key == ERR) return;
+
+    if (commandDialog_) {
+        if (key == KEY_MOUSE) {
+            MEVENT event{};
+            if (getmouse(&event) == OK &&
+                ((event.bstate & BUTTON1_CLICKED) != 0 || (event.bstate & BUTTON1_PRESSED) != 0)) {
+                HandleCommandDialogMouse(event.x, event.y);
+            }
+            return;
+        }
+        HandleCommandDialogInput(key);
+        return;
+    }
 
     if (manualSelect_) {
         if (key == KEY_MOUSE) {
@@ -213,8 +259,6 @@ void Application::HandleInput() {
         return;
     }
 
-    // getch() returns UTF-8 input as bytes on common ncurses terminals. Accept
-    // the full byte range so emoji can be pasted/typed as command arguments.
     if (key >= 32 && key <= 255) {
         commandBuffer_.insert(
             commandBuffer_.begin() + static_cast<std::ptrdiff_t>(cursorPosition_),
@@ -234,6 +278,7 @@ void Application::HandleMouse() {
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
+    (void)width;
 
     if (manualSelect_) {
         const int rowIndex = event.y - 2;
@@ -267,6 +312,13 @@ void Application::ExecuteCommand(const std::string& commandLine) {
 
     const std::string& command = tokens[0];
     infoLines_.clear();
+
+    // Commands that need arguments can be entered by name alone. In that
+    // case SentinelTasks opens a GUI-like ncurses form instead of reporting a
+    // usage error. Supplying arguments inline keeps the original CLI path.
+    if (tokens.size() == 1 && OpenCommandDialog(command)) {
+        return;
+    }
 
     if (command == "quit" || command == "exit") {
         running_ = false;
@@ -372,7 +424,7 @@ void Application::Render() {
     RenderTree();
     RenderDescriptionPane();
 
-    if (!manualSelect_) {
+    if (!manualSelect_ && !commandDialog_) {
         const auto suggestions = BuildSuggestions();
         if (!suggestions.empty() && selectedSuggestion_ >= suggestions.size()) selectedSuggestion_ = 0;
         RenderSuggestions(suggestions);
@@ -380,6 +432,11 @@ void Application::Render() {
 
     RenderStatus();
     RenderCommandLine();
+
+    if (commandDialog_) {
+        RenderCommandDialog();
+    }
+
     refresh();
 }
 
@@ -389,9 +446,14 @@ void Application::RenderHeader() {
     getmaxyx(stdscr, height, width);
     (void)height;
 
-    const std::string title = manualSelect_
-        ? "SentinelTasks | MANUAL SELECT"
-        : "SentinelTasks | Tree Task Planner";
+    std::string title;
+    if (commandDialog_) {
+        title = "SentinelTasks | COMMAND ARGUMENT WINDOW";
+    } else if (manualSelect_) {
+        title = "SentinelTasks | MANUAL SELECT";
+    } else {
+        title = "SentinelTasks | Tree Task Planner";
+    }
 
     DrawClipped(0, 0, std::max(0, width - 1), title);
     if (width > 1) mvhline(1, 0, ACS_HLINE, width - 1);
@@ -506,7 +568,10 @@ void Application::RenderStatus() {
     if (height < 2) return;
 
     std::string line = status_;
-    if (manualSelect_) {
+    if (commandDialog_) {
+        line += line.empty() ? "" : " | ";
+        line += "Tab fields | Enter open/accept | Up/Down dropdown | F2 submit | Esc cancel | mouse supported";
+    } else if (manualSelect_) {
         line += line.empty() ? "" : " | ";
         line += "Up/Down select | Left parent | Right child | click select | Enter/Esc finish";
     } else if (!commandBuffer_.empty()) {
@@ -527,6 +592,12 @@ void Application::RenderCommandLine() {
     move(row, 0);
     clrtoeol();
 
+    if (commandDialog_) {
+        curs_set(0);
+        DrawClipped(row, 0, std::max(0, width - 1), "> [argument window: " + commandDialog_->command + "]");
+        return;
+    }
+
     if (manualSelect_) {
         curs_set(0);
         DrawClipped(row, 0, std::max(0, width - 1), "> [manualSelect] " + selectedId_);
@@ -537,6 +608,137 @@ void Application::RenderCommandLine() {
     DrawClipped(row, 0, 2, "> ");
     if (width > 2) DrawClipped(row, 2, width - 3, commandBuffer_);
     move(row, std::min(width - 1, static_cast<int>(cursorPosition_) + 2));
+}
+
+void Application::RenderCommandDialog() {
+    if (!commandDialog_) return;
+
+    CommandDialog& dialog = *commandDialog_;
+    const DialogRect rect = CalculateDialogRect(dialog.fields.size());
+
+    // Clear and frame a centered ncurses window-like surface.
+    for (int row = rect.top; row < rect.top + rect.height; ++row) {
+        move(row, rect.left);
+        for (int column = 0; column < rect.width; ++column) addch(' ');
+    }
+
+    mvhline(rect.top, rect.left + 1, ACS_HLINE, std::max(0, rect.width - 2));
+    mvhline(rect.top + rect.height - 1, rect.left + 1, ACS_HLINE, std::max(0, rect.width - 2));
+    mvvline(rect.top + 1, rect.left, ACS_VLINE, std::max(0, rect.height - 2));
+    mvvline(rect.top + 1, rect.left + rect.width - 1, ACS_VLINE, std::max(0, rect.height - 2));
+    mvaddch(rect.top, rect.left, ACS_ULCORNER);
+    mvaddch(rect.top, rect.left + rect.width - 1, ACS_URCORNER);
+    mvaddch(rect.top + rect.height - 1, rect.left, ACS_LLCORNER);
+    mvaddch(rect.top + rect.height - 1, rect.left + rect.width - 1, ACS_LRCORNER);
+
+    DrawClipped(rect.top + 1, rect.left + 3, rect.width - 6, dialog.title);
+    DrawClipped(
+        rect.top + 2,
+        rect.left + 3,
+        rect.width - 6,
+        "Fill arguments manually. CLI arguments remain supported."
+    );
+
+    const int labelWidth = std::min(18, std::max(10, rect.width / 4));
+    const int inputColumn = rect.left + 3 + labelWidth;
+    const int inputWidth = std::max(10, rect.width - labelWidth - 7);
+
+    for (std::size_t index = 0; index < dialog.fields.size(); ++index) {
+        DialogField& field = dialog.fields[index];
+        const int row = DialogFieldRow(rect, index);
+        if (row >= rect.top + rect.height - 4) break;
+
+        const bool focused = dialog.focusedControl == index;
+        DrawClipped(row, rect.left + 3, labelWidth - 1, field.label + ":");
+
+        if (focused) attron(A_REVERSE);
+        if (field.kind == DialogFieldKind::TextInput) {
+            std::string display = "[ " + field.value;
+            if (static_cast<int>(display.size()) < inputWidth - 1) {
+                display += std::string(static_cast<std::size_t>(inputWidth - 1 - display.size()), ' ');
+            }
+            display += "]";
+            DrawClipped(row, inputColumn, inputWidth, display);
+        } else {
+            std::string value = field.value.empty() ? "(no options)" : field.value;
+            std::string display = "[ " + value + "  v";
+            if (static_cast<int>(display.size()) < inputWidth - 1) {
+                display += std::string(static_cast<std::size_t>(inputWidth - 1 - display.size()), ' ');
+            }
+            display += "]";
+            DrawClipped(row, inputColumn, inputWidth, display);
+        }
+        if (focused) attroff(A_REVERSE);
+    }
+
+    const std::size_t submitIndex = dialog.fields.size();
+    const std::size_t cancelIndex = dialog.fields.size() + 1;
+    const int buttonRow = rect.top + rect.height - 3;
+    const int submitColumn = rect.left + rect.width / 2 - 14;
+    const int cancelColumn = rect.left + rect.width / 2 + 3;
+
+    if (dialog.focusedControl == submitIndex) attron(A_REVERSE);
+    DrawClipped(buttonRow, submitColumn, 12, "[ Submit ]");
+    if (dialog.focusedControl == submitIndex) attroff(A_REVERSE);
+
+    if (dialog.focusedControl == cancelIndex) attron(A_REVERSE);
+    DrawClipped(buttonRow, cancelColumn, 12, "[ Cancel ]");
+    if (dialog.focusedControl == cancelIndex) attroff(A_REVERSE);
+
+    if (!dialog.validationMessage.empty()) {
+        DrawClipped(
+            rect.top + rect.height - 2,
+            rect.left + 3,
+            rect.width - 6,
+            dialog.validationMessage
+        );
+    }
+
+    // Draw an opened dropdown last so it behaves as an overlay above fields.
+    if (dialog.focusedControl < dialog.fields.size()) {
+        DialogField& field = dialog.fields[dialog.focusedControl];
+        if (field.kind == DialogFieldKind::DropList && field.dropdownOpen) {
+            const int fieldRow = DialogFieldRow(rect, dialog.focusedControl);
+            const std::size_t optionCount = std::min(MaxDropdownRows, field.options.size());
+            if (optionCount > 0) {
+                std::size_t start = 0;
+                if (field.selectedOption >= optionCount) {
+                    start = field.selectedOption - optionCount + 1;
+                }
+                if (start + optionCount > field.options.size()) {
+                    start = field.options.size() - optionCount;
+                }
+
+                for (std::size_t visible = 0; visible < optionCount; ++visible) {
+                    const std::size_t optionIndex = start + visible;
+                    const int optionRow = fieldRow + 1 + static_cast<int>(visible);
+                    if (optionRow >= rect.top + rect.height - 2) break;
+
+                    if (optionIndex == field.selectedOption) attron(A_REVERSE);
+                    std::string option = "  " + field.options[optionIndex];
+                    if (static_cast<int>(option.size()) < inputWidth) {
+                        option += std::string(static_cast<std::size_t>(inputWidth - option.size()), ' ');
+                    }
+                    DrawClipped(optionRow, inputColumn, inputWidth, option);
+                    if (optionIndex == field.selectedOption) attroff(A_REVERSE);
+                }
+            }
+        }
+    }
+
+    // Put the real terminal cursor inside the currently focused text field.
+    if (dialog.focusedControl < dialog.fields.size()) {
+        DialogField& field = dialog.fields[dialog.focusedControl];
+        if (field.kind == DialogFieldKind::TextInput) {
+            curs_set(1);
+            const int row = DialogFieldRow(rect, dialog.focusedControl);
+            const int cursorColumn = inputColumn + 2 + static_cast<int>(field.cursor);
+            move(row, std::min(inputColumn + inputWidth - 2, cursorColumn));
+            return;
+        }
+    }
+
+    curs_set(0);
 }
 
 std::vector<Application::Suggestion> Application::BuildSuggestions() const {
@@ -704,6 +906,380 @@ void Application::EnsureSelection() {
 
     const auto visible = tree_.Flatten();
     selectedId_ = visible.empty() || !visible.front().node ? std::string{} : visible.front().node->id;
+}
+
+bool Application::OpenCommandDialog(const std::string& command) {
+    CommandDialog dialog;
+    dialog.command = command;
+    dialog.title = "Command: " + command;
+
+    const auto makeText = [](std::string label, std::string value = {}) {
+        DialogField field;
+        field.label = std::move(label);
+        field.kind = DialogFieldKind::TextInput;
+        field.value = std::move(value);
+        field.cursor = field.value.size();
+        return field;
+    };
+
+    const auto makeDrop = [&](std::string label, std::vector<std::string> options, std::string preferred = {}) {
+        DialogField field;
+        field.label = std::move(label);
+        field.kind = DialogFieldKind::DropList;
+        field.options = std::move(options);
+        field.selectedOption = FindOptionIndex(field.options, preferred).value_or(0);
+        if (!field.options.empty()) field.value = field.options[field.selectedOption];
+        return field;
+    };
+
+    if (command == "addFolder" || command == "addTask") {
+        dialog.fields.push_back(makeText("ID"));
+
+        std::string preferredParent = "root";
+        if (const TaskNode* selected = tree_.GetNode(selectedId_)) {
+            if (selected->kind == NodeKind::Folder) preferredParent = selected->id;
+            else if (!selected->parentId.empty()) preferredParent = selected->parentId;
+        }
+        dialog.fields.push_back(makeDrop("Parent", NodeIdOptions(true, true), preferredParent));
+
+        const std::string defaultEmoji = command == "addFolder" ? "🟥" : "🔘";
+        dialog.fields.push_back(makeDrop("Emoji", TaskTree::AllowedEmojis(), defaultEmoji));
+        dialog.fields.push_back(makeText("Name"));
+    } else if (command == "setDescription") {
+        dialog.fields.push_back(makeDrop("Node", NodeIdOptions(false, false), selectedId_));
+        std::string description;
+        if (const TaskNode* node = tree_.GetNode(selectedId_)) description = node->description;
+        dialog.fields.push_back(makeText("Description", description));
+    } else if (command == "setEmoji") {
+        dialog.fields.push_back(makeDrop("Node", NodeIdOptions(false, false), selectedId_));
+        std::string currentEmoji;
+        if (const TaskNode* node = tree_.GetNode(selectedId_)) currentEmoji = node->emoji;
+        dialog.fields.push_back(makeDrop("Emoji", TaskTree::AllowedEmojis(), currentEmoji));
+    } else if (command == "remove" || command == "select" || command == "manualSelect") {
+        dialog.fields.push_back(makeDrop("Node", NodeIdOptions(false, false), selectedId_));
+    } else {
+        return false;
+    }
+
+    commandDialog_ = std::move(dialog);
+    status_ = "Argument window opened for: " + command;
+    ResetSuggestionNavigation();
+    curs_set(0);
+    return true;
+}
+
+void Application::CloseCommandDialog() {
+    commandDialog_.reset();
+    curs_set(1);
+}
+
+void Application::HandleCommandDialogInput(int key) {
+    if (!commandDialog_) return;
+    CommandDialog& dialog = *commandDialog_;
+
+    if (key == 27) {
+        if (dialog.focusedControl < dialog.fields.size() &&
+            dialog.fields[dialog.focusedControl].dropdownOpen) {
+            CloseFocusedDropList(false);
+        } else {
+            status_ = "Argument window cancelled.";
+            CloseCommandDialog();
+        }
+        return;
+    }
+
+    if (key == KEY_F(2)) {
+        SubmitCommandDialog();
+        return;
+    }
+
+    if (key == '\t') {
+        if (dialog.focusedControl < dialog.fields.size()) {
+            dialog.fields[dialog.focusedControl].dropdownOpen = false;
+        }
+        MoveDialogFocus(1);
+        return;
+    }
+#ifdef KEY_BTAB
+    if (key == KEY_BTAB) {
+        if (dialog.focusedControl < dialog.fields.size()) {
+            dialog.fields[dialog.focusedControl].dropdownOpen = false;
+        }
+        MoveDialogFocus(-1);
+        return;
+    }
+#endif
+
+    const std::size_t submitIndex = dialog.fields.size();
+    const std::size_t cancelIndex = dialog.fields.size() + 1;
+
+    if (dialog.focusedControl == submitIndex) {
+        if (key == '\n' || key == KEY_ENTER || key == ' ') SubmitCommandDialog();
+        else if (key == KEY_LEFT) MoveDialogFocus(-1);
+        else if (key == KEY_RIGHT) MoveDialogFocus(1);
+        return;
+    }
+
+    if (dialog.focusedControl == cancelIndex) {
+        if (key == '\n' || key == KEY_ENTER || key == ' ') {
+            status_ = "Argument window cancelled.";
+            CloseCommandDialog();
+        } else if (key == KEY_LEFT) MoveDialogFocus(-1);
+        else if (key == KEY_RIGHT) MoveDialogFocus(1);
+        return;
+    }
+
+    if (dialog.focusedControl >= dialog.fields.size()) return;
+    DialogField& field = dialog.fields[dialog.focusedControl];
+
+    if (field.kind == DialogFieldKind::DropList) {
+        if (field.options.empty()) return;
+
+        if (key == KEY_UP) {
+            field.dropdownOpen = true;
+            field.selectedOption = field.selectedOption == 0 ? field.options.size() - 1 : field.selectedOption - 1;
+            field.value = field.options[field.selectedOption];
+            return;
+        }
+        if (key == KEY_DOWN) {
+            field.dropdownOpen = true;
+            field.selectedOption = (field.selectedOption + 1) % field.options.size();
+            field.value = field.options[field.selectedOption];
+            return;
+        }
+        if (key == '\n' || key == KEY_ENTER || key == ' ') {
+            if (field.dropdownOpen) CloseFocusedDropList(true);
+            else OpenFocusedDropList();
+            return;
+        }
+        if (key == KEY_LEFT) {
+            field.dropdownOpen = false;
+            MoveDialogFocus(-1);
+            return;
+        }
+        if (key == KEY_RIGHT) {
+            field.dropdownOpen = false;
+            MoveDialogFocus(1);
+            return;
+        }
+        return;
+    }
+
+    if (key == KEY_LEFT) {
+        field.cursor = PreviousUtf8Boundary(field.value, field.cursor);
+        return;
+    }
+    if (key == KEY_RIGHT) {
+        field.cursor = NextUtf8Boundary(field.value, field.cursor);
+        return;
+    }
+    if (key == KEY_HOME) {
+        field.cursor = 0;
+        return;
+    }
+    if (key == KEY_END) {
+        field.cursor = field.value.size();
+        return;
+    }
+    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
+        if (field.cursor > 0) {
+            const std::size_t previous = PreviousUtf8Boundary(field.value, field.cursor);
+            field.value.erase(previous, field.cursor - previous);
+            field.cursor = previous;
+        }
+        return;
+    }
+    if (key == '\n' || key == KEY_ENTER) {
+        MoveDialogFocus(1);
+        return;
+    }
+    if (key >= 32 && key <= 255) {
+        field.value.insert(
+            field.value.begin() + static_cast<std::ptrdiff_t>(field.cursor),
+            static_cast<char>(key)
+        );
+        ++field.cursor;
+        return;
+    }
+}
+
+void Application::HandleCommandDialogMouse(int mouseX, int mouseY) {
+    if (!commandDialog_) return;
+    CommandDialog& dialog = *commandDialog_;
+    const DialogRect rect = CalculateDialogRect(dialog.fields.size());
+
+    const std::size_t submitIndex = dialog.fields.size();
+    const std::size_t cancelIndex = dialog.fields.size() + 1;
+    const int buttonRow = rect.top + rect.height - 3;
+    const int submitColumn = rect.left + rect.width / 2 - 14;
+    const int cancelColumn = rect.left + rect.width / 2 + 3;
+
+    if (mouseY == buttonRow && mouseX >= submitColumn && mouseX < submitColumn + 12) {
+        dialog.focusedControl = submitIndex;
+        SubmitCommandDialog();
+        return;
+    }
+    if (mouseY == buttonRow && mouseX >= cancelColumn && mouseX < cancelColumn + 12) {
+        dialog.focusedControl = cancelIndex;
+        status_ = "Argument window cancelled.";
+        CloseCommandDialog();
+        return;
+    }
+
+    const int labelWidth = std::min(18, std::max(10, rect.width / 4));
+    const int inputColumn = rect.left + 3 + labelWidth;
+    const int inputWidth = std::max(10, rect.width - labelWidth - 7);
+
+    // Check the currently opened drop-list overlay first.
+    if (dialog.focusedControl < dialog.fields.size()) {
+        DialogField& openField = dialog.fields[dialog.focusedControl];
+        if (openField.kind == DialogFieldKind::DropList && openField.dropdownOpen && !openField.options.empty()) {
+            const int fieldRow = DialogFieldRow(rect, dialog.focusedControl);
+            const std::size_t optionCount = std::min(MaxDropdownRows, openField.options.size());
+            std::size_t start = 0;
+            if (openField.selectedOption >= optionCount) start = openField.selectedOption - optionCount + 1;
+            if (start + optionCount > openField.options.size()) start = openField.options.size() - optionCount;
+
+            if (mouseX >= inputColumn && mouseX < inputColumn + inputWidth &&
+                mouseY >= fieldRow + 1 && mouseY < fieldRow + 1 + static_cast<int>(optionCount)) {
+                const std::size_t option = start + static_cast<std::size_t>(mouseY - fieldRow - 1);
+                if (option < openField.options.size()) {
+                    openField.selectedOption = option;
+                    openField.value = openField.options[option];
+                    openField.dropdownOpen = false;
+                }
+                return;
+            }
+        }
+    }
+
+    for (std::size_t index = 0; index < dialog.fields.size(); ++index) {
+        const int row = DialogFieldRow(rect, index);
+        if (mouseY != row || mouseX < inputColumn || mouseX >= inputColumn + inputWidth) continue;
+
+        dialog.focusedControl = index;
+        DialogField& field = dialog.fields[index];
+        if (field.kind == DialogFieldKind::DropList) {
+            field.dropdownOpen = !field.dropdownOpen;
+        } else {
+            const int relative = std::max(0, mouseX - inputColumn - 2);
+            field.cursor = std::min(field.value.size(), static_cast<std::size_t>(relative));
+            while (field.cursor > 0 && field.cursor < field.value.size() &&
+                   IsUtf8Continuation(static_cast<unsigned char>(field.value[field.cursor]))) {
+                --field.cursor;
+            }
+        }
+        return;
+    }
+}
+
+void Application::MoveDialogFocus(int delta) {
+    if (!commandDialog_) return;
+    CommandDialog& dialog = *commandDialog_;
+    const std::size_t controlCount = dialog.fields.size() + 2;
+    if (controlCount == 0) return;
+
+    if (delta < 0) {
+        dialog.focusedControl = dialog.focusedControl == 0 ? controlCount - 1 : dialog.focusedControl - 1;
+    } else {
+        dialog.focusedControl = (dialog.focusedControl + 1) % controlCount;
+    }
+}
+
+void Application::OpenFocusedDropList() {
+    if (!commandDialog_) return;
+    CommandDialog& dialog = *commandDialog_;
+    if (dialog.focusedControl >= dialog.fields.size()) return;
+    DialogField& field = dialog.fields[dialog.focusedControl];
+    if (field.kind != DialogFieldKind::DropList || field.options.empty()) return;
+    field.dropdownOpen = true;
+}
+
+void Application::CloseFocusedDropList(bool acceptSelection) {
+    if (!commandDialog_) return;
+    CommandDialog& dialog = *commandDialog_;
+    if (dialog.focusedControl >= dialog.fields.size()) return;
+    DialogField& field = dialog.fields[dialog.focusedControl];
+    if (field.kind != DialogFieldKind::DropList) return;
+
+    if (acceptSelection && !field.options.empty()) {
+        field.selectedOption = std::min(field.selectedOption, field.options.size() - 1);
+        field.value = field.options[field.selectedOption];
+    }
+    field.dropdownOpen = false;
+}
+
+bool Application::SubmitCommandDialog() {
+    if (!commandDialog_) return false;
+    CommandDialog& dialog = *commandDialog_;
+
+    for (const DialogField& field : dialog.fields) {
+        if (field.value.empty()) {
+            dialog.validationMessage = "Required field is empty: " + field.label;
+            return false;
+        }
+    }
+
+    const std::string commandLine = BuildDialogCommand();
+    if (commandLine.empty()) {
+        dialog.validationMessage = "Could not build command arguments.";
+        return false;
+    }
+
+    const std::string commandName = dialog.command;
+    CloseCommandDialog();
+    AddCommandToHistory(commandLine);
+    ExecuteCommand(commandLine);
+    status_ += status_.empty() ? "" : " | ";
+    status_ += "Submitted via argument window: " + commandName;
+    return true;
+}
+
+std::string Application::BuildDialogCommand() const {
+    if (!commandDialog_) return {};
+    const CommandDialog& dialog = *commandDialog_;
+    std::string result = dialog.command;
+
+    for (const DialogField& field : dialog.fields) {
+        result += ' ';
+        result += QuoteArgument(field.value);
+    }
+
+    return result;
+}
+
+std::vector<std::string> Application::NodeIdOptions(bool foldersOnly, bool includeRoot) const {
+    std::vector<std::string> options;
+    if (includeRoot) options.push_back("root");
+
+    for (const auto& visible : tree_.Flatten()) {
+        if (!visible.node) continue;
+        if (foldersOnly && visible.node->kind != NodeKind::Folder) continue;
+        options.push_back(visible.node->id);
+    }
+
+    return options;
+}
+
+std::optional<std::size_t> Application::FindOptionIndex(
+    const std::vector<std::string>& options,
+    const std::string& value
+) const {
+    const auto iterator = std::find(options.begin(), options.end(), value);
+    if (iterator == options.end()) return std::nullopt;
+    return static_cast<std::size_t>(std::distance(options.begin(), iterator));
+}
+
+std::string Application::QuoteArgument(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (const char character : value) {
+        if (character == '\\' || character == '"') escaped.push_back('\\');
+        escaped.push_back(character);
+    }
+    escaped.push_back('"');
+    return escaped;
 }
 
 std::vector<std::string> Application::Tokenize(const std::string& line) {
