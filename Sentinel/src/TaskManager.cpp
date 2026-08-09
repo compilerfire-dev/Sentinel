@@ -129,7 +129,26 @@ const std::unordered_map<std::string, RgbColor>& TaskManager::GetDefinedColors()
     return definedColors_;
 }
 
+void TaskManager::SetAutoSaveInterval(std::chrono::seconds interval) {
+    if (interval < std::chrono::seconds(1)) interval = std::chrono::seconds(1);
+    autoSaveInterval_ = interval;
+    lastPeriodicSave_ = std::chrono::steady_clock::now();
+}
+
+std::chrono::seconds TaskManager::GetAutoSaveInterval() const noexcept {
+    return autoSaveInterval_;
+}
+
 bool TaskManager::Save(std::string& errorMessage) const {
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastPeriodicSave_ < autoSaveInterval_) {
+        errorMessage.clear();
+        return true;
+    }
+    return SaveNow(errorMessage);
+}
+
+bool TaskManager::SaveNow(std::string& errorMessage) const {
     try {
         const std::filesystem::path path(jsonFilePath_);
         if (path.has_parent_path()) {
@@ -152,6 +171,7 @@ bool TaskManager::Save(std::string& errorMessage) const {
 
         json* section = SentinelSectionForWrite(root);
         (*section)["version"] = 3;
+        (*section)["auto_save_seconds"] = autoSaveInterval_.count();
         (*section)["defined_colors"] = json::object();
         (*section)["tasks"] = json::array();
 
@@ -189,6 +209,7 @@ bool TaskManager::Save(std::string& errorMessage) const {
         }
         output << root.dump(4) << '\n';
         errorMessage.clear();
+        lastPeriodicSave_ = std::chrono::steady_clock::now();
         return true;
     } catch (const std::exception& exception) {
         errorMessage = exception.what();
@@ -202,7 +223,8 @@ bool TaskManager::Load(std::string& errorMessage) {
         if (!std::filesystem::exists(path)) {
             tasks_.clear();
             definedColors_.clear();
-            return Save(errorMessage);
+            autoSaveInterval_ = std::chrono::seconds(1);
+            return SaveNow(errorMessage);
         }
 
         std::ifstream input(path);
@@ -226,6 +248,10 @@ bool TaskManager::Load(std::string& errorMessage) {
 
         std::vector<Task> loaded;
         std::unordered_map<std::string, RgbColor> loadedColors;
+        const auto loadedAutoSaveSeconds = std::max(
+            1LL,
+            data.value("auto_save_seconds", 1LL)
+        );
 
         if (data.contains("defined_colors") && data["defined_colors"].is_object()) {
             for (auto iterator = data["defined_colors"].begin();
@@ -270,6 +296,8 @@ bool TaskManager::Load(std::string& errorMessage) {
 
         tasks_ = std::move(loaded);
         definedColors_ = std::move(loadedColors);
+        autoSaveInterval_ = std::chrono::seconds(loadedAutoSaveSeconds);
+        lastPeriodicSave_ = std::chrono::steady_clock::now();
         errorMessage.clear();
         return true;
     } catch (const std::exception& exception) {
@@ -285,7 +313,7 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
     }
 
     std::string saveError;
-    if (!Save(saveError)) {
+    if (!SaveNow(saveError)) {
         errorMessage = "Current data could not be saved before switching: " + saveError;
         return false;
     }
@@ -293,6 +321,7 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
     const std::string previousPath = jsonFilePath_;
     const std::vector<Task> previousTasks = tasks_;
     const auto previousColors = definedColors_;
+    const auto previousAutoSaveInterval = autoSaveInterval_;
 
     jsonFilePath_ = path;
     if (Load(errorMessage)) return true;
@@ -300,6 +329,8 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
     jsonFilePath_ = previousPath;
     tasks_ = previousTasks;
     definedColors_ = previousColors;
+    autoSaveInterval_ = previousAutoSaveInterval;
+    lastPeriodicSave_ = std::chrono::steady_clock::now();
     return false;
 }
 
