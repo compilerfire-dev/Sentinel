@@ -2,6 +2,7 @@
 
 #include "Task.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -33,8 +34,12 @@ public:
     std::optional<RgbColor> GetDefinedColor(const std::string& id) const;
     const std::unordered_map<std::string, RgbColor>& GetDefinedColors() const noexcept;
 
+    void SetAutoSaveInterval(std::chrono::seconds interval);
+    std::chrono::seconds GetAutoSaveInterval() const noexcept;
+
     bool Load(std::string& errorMessage);
     bool Save(std::string& errorMessage) const;
+    bool SaveNow(std::string& errorMessage) const;
     bool SetJsonFile(const std::string& path, std::string& errorMessage);
     const std::string& GetJsonFile() const noexcept;
 
@@ -44,4 +49,8 @@ private:
     std::vector<Task> tasks_;
     std::unordered_map<std::string, RgbColor> definedColors_;
     std::string jsonFilePath_{"current_data.json"};
+    std::chrono::seconds autoSaveInterval_{1};
+    mutable std::chrono::steady_clock::time_point lastPeriodicSave_{
+        std::chrono::steady_clock::now()
+    };
 };
