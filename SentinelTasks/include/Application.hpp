@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Color.hpp"
 #include "TaskTree.hpp"
 
 #include <cstddef>
 #include <iterator>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -19,10 +21,7 @@ private:
         std::string replacement;
     };
 
-    enum class DialogFieldKind {
-        TextInput,
-        DropList
-    };
+    enum class DialogFieldKind { TextInput, DropList };
 
     struct DialogField {
         std::string label;
@@ -76,15 +75,15 @@ private:
     void HandleCommandDialogInput(int key);
     void HandleCommandDialogMouse(int mouseX, int mouseY);
     void MoveDialogFocus(int delta);
-    void OpenFocusedDropList();
-    void CloseFocusedDropList(bool acceptSelection);
     bool SubmitCommandDialog();
     std::string BuildDialogCommand() const;
     std::vector<std::string> NodeIdOptions(bool foldersOnly, bool includeRoot) const;
-    std::optional<std::size_t> FindOptionIndex(
-        const std::vector<std::string>& options,
-        const std::string& value
-    ) const;
+    std::vector<std::string> ColorNameOptions() const;
+    std::optional<std::size_t> FindOptionIndex(const std::vector<std::string>& options, const std::string& value) const;
+
+    std::optional<RgbColor> ResolveColor(const std::string& value) const;
+    bool DefineColor(const std::string& id, const std::string& rgbExpression);
+    bool ApplyColorCommand(const std::vector<std::string>& tokens);
 
     static std::string QuoteArgument(const std::string& value);
     static std::vector<std::string> Tokenize(const std::string& line);
@@ -93,6 +92,9 @@ private:
     static std::size_t NextUtf8Boundary(const std::string& text, std::size_t position);
 
     TaskTree tree_;
+    TreeDisplaySettings treeDisplaySettings_;
+    std::unordered_map<std::string, RgbColor> definedColors_;
+
     bool running_{true};
     bool manualSelect_{false};
     std::string selectedId_;
@@ -109,6 +111,5 @@ private:
 
     std::size_t selectedSuggestion_{0};
     bool navigatingSuggestions_{false};
-
     std::optional<CommandDialog> commandDialog_;
 };
