@@ -16,9 +16,10 @@ namespace {
 
 struct CommandDefinition { std::string_view name; std::string_view description; };
 
-constexpr std::array<CommandDefinition, 19> Commands{{
+constexpr std::array<CommandDefinition, 20> Commands{{
     {"addFolder", "add a folder node"}, {"addTask", "add an individual task"},
     {"remove", "remove a node and its subtree"}, {"erase", "erase a node and its subtree"},
+    {"clear", "clear all nodes, or one node by ID"},
     {"setDescription", "edit a node description in right pane"},
     {"start", "start/resume a task timer"}, {"stop", "stop a task timer"},
     {"done", "complete a task and stop timer"}, {"unset", "untick a completed task"},
@@ -41,6 +42,8 @@ const std::vector<std::string> CommandHelp{
     "addTask <id> <parent|root> <name>              Add an individual task node",
     "remove <id>                                     Remove a node and descendants",
     "erase <id>                                      Erase a node and descendants",
+    "clear                                            Remove every folder/task",
+    "clear <id>                                       Remove one node and descendants",
     "setDescription                                  Edit selected node in right pane",
     "setDescription <id>                             Select node and edit in right pane",
     "setDescription <id> <description>               Set description directly",
@@ -395,6 +398,31 @@ void Application::ExecuteCommand(const std::string& line) {
         return;
     }
 
+    if(c=="clear"){
+        if(t.size()==1){
+            tree_=TaskTree{};
+            selectedId_.clear();
+            visibleRowIds_.clear();
+            TreeScrollOffset=0;
+            status_="All tasks and folders cleared.";
+            SaveCurrentData();
+            return;
+        }
+        if(t.size()==2){
+            std::string error;
+            if(!tree_.RemoveNode(t[1],error))status_=error;
+            else{
+                if(!tree_.GetNode(selectedId_))selectedId_.clear();
+                EnsureSelection();
+                status_="Cleared: "+t[1];
+                SaveCurrentData();
+            }
+            return;
+        }
+        status_="Usage: clear [id]";
+        return;
+    }
+
     if(t.size()==1&&OpenCommandDialog(c))return;
     if(c=="quit"||c=="exit"){running_=false;return;}
     if(c=="commands"){TreeScrollOffset=0;infoLines_=CommandHelp;status_="Available SentinelTasks commands.";return;}
@@ -487,7 +515,7 @@ void Application::SelectParent(){if(const auto p=tree_.ParentOf(selectedId_)){se
 void Application::SelectFirstChild(){if(const auto c=tree_.FirstChildOf(selectedId_)){selectedId_=*c;const auto v=tree_.Flatten();for(std::size_t i=0;i<v.size();++i)if(v[i].node&&v[i].node->id==selectedId_){KeepTreeIndexVisible(i,v.size());break;}}}
 void Application::EnsureSelection(){if(!selectedId_.empty()&&tree_.GetNode(selectedId_))return;const auto v=tree_.Flatten();selectedId_=v.empty()?std::string{}:v.front().node->id;}
 
-bool Application::OpenCommandDialog(const std::string& command){CommandDialog d;d.command=command;d.title="Command: "+command;auto text=[](std::string label,std::string value={}){DialogField f;f.label=std::move(label);f.value=std::move(value);f.cursor=f.value.size();return f;};auto drop=[&](std::string label,std::vector<std::string> options,std::string preferred={}){DialogField f;f.label=std::move(label);f.kind=DialogFieldKind::DropList;f.options=std::move(options);f.selectedOption=FindOptionIndex(f.options,preferred).value_or(0);if(!f.options.empty())f.value=f.options[f.selectedOption];return f;};if(command=="setDescription"||command=="setJsonFile"||command=="manualSelect")return false;if(command=="autoSave")d.fields.push_back(text("Duration",SentinelShared::FormatDuration(autoSaveInterval_)));else if(command=="addFolder"||command=="addTask"){d.fields.push_back(text("ID"));std::string parent="root";if(const auto* n=tree_.GetNode(selectedId_)){if(n->kind==NodeKind::Folder)parent=n->id;else if(!n->parentId.empty())parent=n->parentId;}d.fields.push_back(drop("Parent",NodeIdOptions(true,true),parent));d.fields.push_back(text("Name"));}else if(command=="remove"||command=="erase"||command=="select")d.fields.push_back(drop("Node",NodeIdOptions(false,false),selectedId_));else if(command=="start"||command=="stop"||command=="done"||command=="unset")d.fields.push_back(drop("Task",TaskIdOptions(),selectedId_));else if(command=="defineColor"){d.fields.push_back(text("Color name"));d.fields.push_back(text("RGB","rgb(255,255,255)"));}else if(command=="color"){auto targets=NodeIdOptions(false,false);targets.insert(targets.begin(),"default");d.fields.push_back(drop("Target",std::move(targets),selectedId_.empty()?"default":selectedId_));d.fields.push_back(drop("Foreground",ColorNameOptions(),"white"));d.fields.push_back(drop("Background",ColorNameOptions(),"black"));}else return false;commandDialog_=std::move(d);status_="Argument window opened for: "+command;return true;}
+bool Application::OpenCommandDialog(const std::string& command){CommandDialog d;d.command=command;d.title="Command: "+command;auto text=[](std::string label,std::string value={}){DialogField f;f.label=std::move(label);f.value=std::move(value);f.cursor=f.value.size();return f;};auto drop=[&](std::string label,std::vector<std::string> options,std::string preferred={}){DialogField f;f.label=std::move(label);f.kind=DialogFieldKind::DropList;f.options=std::move(options);f.selectedOption=FindOptionIndex(f.options,preferred).value_or(0);if(!f.options.empty())f.value=f.options[f.selectedOption];return f;};if(command=="setDescription"||command=="setJsonFile"||command=="manualSelect"||command=="clear")return false;if(command=="autoSave")d.fields.push_back(text("Duration",SentinelShared::FormatDuration(autoSaveInterval_)));else if(command=="addFolder"||command=="addTask"){d.fields.push_back(text("ID"));std::string parent="root";if(const auto* n=tree_.GetNode(selectedId_)){if(n->kind==NodeKind::Folder)parent=n->id;else if(!n->parentId.empty())parent=n->parentId;}d.fields.push_back(drop("Parent",NodeIdOptions(true,true),parent));d.fields.push_back(text("Name"));}else if(command=="remove"||command=="erase"||command=="select")d.fields.push_back(drop("Node",NodeIdOptions(false,false),selectedId_));else if(command=="start"||command=="stop"||command=="done"||command=="unset")d.fields.push_back(drop("Task",TaskIdOptions(),selectedId_));else if(command=="defineColor"){d.fields.push_back(text("Color name"));d.fields.push_back(text("RGB","rgb(255,255,255)"));}else if(command=="color"){auto targets=NodeIdOptions(false,false);targets.insert(targets.begin(),"default");d.fields.push_back(drop("Target",std::move(targets),selectedId_.empty()?"default":selectedId_));d.fields.push_back(drop("Foreground",ColorNameOptions(),"white"));d.fields.push_back(drop("Background",ColorNameOptions(),"black"));}else return false;commandDialog_=std::move(d);status_="Argument window opened for: "+command;return true;}
 void Application::CloseCommandDialog(){commandDialog_.reset();curs_set(1);}
 void Application::HandleCommandDialogInput(int key){if(!commandDialog_)return;auto& d=*commandDialog_;if(key==27){CloseCommandDialog();return;}if(key==KEY_F(2)){SubmitCommandDialog();return;}if(key=='\t'){MoveDialogFocus(1);return;}
 #ifdef KEY_BTAB
