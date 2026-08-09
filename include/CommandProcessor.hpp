@@ -19,7 +19,6 @@ public:
     const std::vector<std::string>& GetInfoLines() const noexcept;
 
 private:
-    std::optional<std::size_t> ParseNumericIndex(const std::string& value) const;
     std::optional<std::size_t> ResolveTaskReference(const std::string& value);
     bool ParseColorCommand(const std::string& argument);
     void Autosave();
