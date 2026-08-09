@@ -11,6 +11,7 @@
 #if defined(__unix__) || defined(__linux__)
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 #endif
 
@@ -113,9 +114,9 @@ std::optional<std::filesystem::path> RunChooserInChildProcess(
     }
 
     if (child == 0) {
-        // GTK is deliberately initialized only in this child.  The ncurses
-        // parent therefore never enters GTK/GLib's nested event loop and its
-        // terminal state cannot be captured or altered by the chooser.
+        // GTK is deliberately initialized only in this child. The ncurses
+        // parent never enters GTK/GLib's nested event loop, so GTK cannot
+        // leave the terminal application's event state in a bad condition.
         ::close(descriptors[0]);
 
         const auto selected = RunGtkJsonChooser(currentPath);
@@ -163,6 +164,13 @@ std::optional<std::filesystem::path> RunChooserInChildProcess(
     int status = 0;
     while (::waitpid(child, &status, 0) < 0) {
         if (errno != EINTR) return std::nullopt;
+    }
+
+    // Discard terminal keystrokes/focus escape sequences that may have queued
+    // while the desktop chooser had focus. They belong to the dialog session,
+    // not to Sentinel's command line.
+    if (::isatty(STDIN_FILENO)) {
+        ::tcflush(STDIN_FILENO, TCIFLUSH);
     }
 
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0 || selectedPath.empty()) {
