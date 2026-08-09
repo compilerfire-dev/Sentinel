@@ -15,10 +15,13 @@
 namespace {
 
 constexpr std::size_t MaxSuggestions = 6;
+constexpr std::size_t MouseWheelStep = 3;
 constexpr short ScreenColorPair = 1;
 constexpr short TaskColorPair = 2;
 constexpr short RunningTaskPair = 3;
 constexpr short FirstPerTaskPair = 4;
+
+std::size_t ContentScrollOffset = 0;
 
 constexpr RgbColor ScreenForeground{255, 255, 255};
 constexpr RgbColor ScreenBackground{0, 0, 0};
@@ -57,6 +60,26 @@ constexpr std::array<CommandDefinition, 14> Commands{{
 bool TakesTaskArgument(std::string_view command) {
     return command == "remove" || command == "start" || command == "stop" ||
            command == "done" || command == "search";
+}
+
+bool IsWheelUp(mmask_t state) {
+#ifdef BUTTON4_PRESSED
+    if ((state & BUTTON4_PRESSED) != 0) return true;
+#endif
+#ifdef BUTTON4_CLICKED
+    if ((state & BUTTON4_CLICKED) != 0) return true;
+#endif
+    return false;
+}
+
+bool IsWheelDown(mmask_t state) {
+#ifdef BUTTON5_PRESSED
+    if ((state & BUTTON5_PRESSED) != 0) return true;
+#endif
+#ifdef BUTTON5_CLICKED
+    if ((state & BUTTON5_CLICKED) != 0) return true;
+#endif
+    return false;
 }
 
 std::string Trim(std::string value) {
@@ -308,6 +331,7 @@ void Application::OpenNativeJsonFilePicker() {
             "setJsonFile " + QuoteArgument(selected->string());
         commandProcessor_.Execute(command);
         AddCommandToHistory(command);
+        ContentScrollOffset = 0;
         persistenceStatus_.clear();
     } else {
         persistenceStatus_ = "JSON file selection cancelled or unavailable.";
@@ -482,6 +506,29 @@ void Application::HandleInput() {
 void Application::HandleMouse() {
     MEVENT event{};
     if (getmouse(&event) != OK) return;
+
+    if (IsWheelUp(event.bstate) || IsWheelDown(event.bstate)) {
+        const auto suggestions = BuildSuggestions();
+        const int lastRow = SuggestionStartRow(suggestions.size());
+        const std::size_t capacity = static_cast<std::size_t>(std::max(0, lastRow - 2));
+        const std::size_t total = !commandProcessor_.GetInfoLines().empty()
+            ? commandProcessor_.GetInfoLines().size()
+            : VisibleTaskIndices().size();
+        const std::size_t maxOffset = total > capacity ? total - capacity : 0;
+
+        if (IsWheelUp(event.bstate)) {
+            ContentScrollOffset = ContentScrollOffset > MouseWheelStep
+                ? ContentScrollOffset - MouseWheelStep
+                : 0;
+        } else {
+            ContentScrollOffset = std::min(
+                maxOffset,
+                ContentScrollOffset + MouseWheelStep
+            );
+        }
+        return;
+    }
+
     if ((event.bstate & BUTTON1_CLICKED) == 0 &&
         (event.bstate & BUTTON1_PRESSED) == 0) return;
 
@@ -905,20 +952,31 @@ void Application::RenderTasks() {
         ? std::vector<Suggestion>{}
         : BuildSuggestions();
     const int lastRow = SuggestionStartRow(suggestions.size());
+    const std::size_t capacity = static_cast<std::size_t>(std::max(0, lastRow - 2));
     int row = 2;
 
     if (!commandProcessor_.GetInfoLines().empty()) {
         SetNormalUiAttributes();
-        for (const auto& line : commandProcessor_.GetInfoLines()) {
-            if (row >= lastRow) break;
-            mvaddnstr(row++, 0, line.c_str(), std::max(0, width - 1));
+        const auto& lines = commandProcessor_.GetInfoLines();
+        const std::size_t maxOffset = lines.size() > capacity ? lines.size() - capacity : 0;
+        ContentScrollOffset = std::min(ContentScrollOffset, maxOffset);
+        for (std::size_t index = ContentScrollOffset;
+             index < lines.size() && row < lastRow;
+             ++index) {
+            mvaddnstr(row++, 0, lines[index].c_str(), std::max(0, width - 1));
         }
         return;
     }
 
+    const auto indices = VisibleTaskIndices();
+    const std::size_t maxOffset = indices.size() > capacity ? indices.size() - capacity : 0;
+    ContentScrollOffset = std::min(ContentScrollOffset, maxOffset);
+
     std::size_t slot = 0;
-    for (const auto index : VisibleTaskIndices()) {
-        if (row >= lastRow) break;
+    for (std::size_t position = ContentScrollOffset;
+         position < indices.size() && row < lastRow;
+         ++position) {
+        const auto index = indices[position];
         const Task* task = taskManager_.GetTask(index);
         if (!task) continue;
 
@@ -1019,10 +1077,13 @@ void Application::RenderStatus() {
         status += "Tab next | Shift+Tab previous | Enter choose | F2 submit | Esc cancel";
     } else if (!BuildSuggestions().empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Tab complete | Down suggestions | Up history | Left/Right cursor | click select";
+        status += "Tab complete | Down suggestions | Up history | Left/Right cursor | click select | wheel scroll";
     } else if (!commandHistory_.empty()) {
         status += status.empty() ? "" : " | ";
-        status += "Up: previous command | Left/Right: cursor";
+        status += "Up: previous command | Left/Right: cursor | Mouse wheel: scroll items";
+    } else {
+        status += status.empty() ? "" : " | ";
+        status += "Mouse wheel: scroll items";
     }
     mvaddnstr(height - 2, 0, status.c_str(), std::max(0, width - 1));
 }
