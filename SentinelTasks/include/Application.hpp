@@ -115,6 +115,7 @@ private:
     TreeDisplaySettings treeDisplaySettings_;
     std::unordered_map<std::string, RgbColor> definedColors_;
     TaskDataStore dataStore_;
+    std::chrono::seconds autoSaveInterval_{1};
     std::chrono::steady_clock::time_point lastAutosave_{std::chrono::steady_clock::now()};
 
     bool running_{true};
