@@ -7,6 +7,7 @@
 #include <utility>
 
 namespace {
+
 std::string FormatDuration(std::chrono::seconds seconds) {
     const auto total = seconds.count();
     const auto hours = total / 3600;
@@ -20,47 +21,10 @@ std::string FormatDuration(std::chrono::seconds seconds) {
            << std::setw(2) << remaining;
     return stream.str();
 }
-}
 
-void TaskNode::Start() {
-    if (kind != NodeKind::Task || running || completed) return;
-    startedAt = Clock::now();
-    running = true;
-}
-
-void TaskNode::Stop() {
-    if (kind != NodeKind::Task || !running) return;
-    accumulatedTime += std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - startedAt);
-    running = false;
-}
-
-void TaskNode::Complete() {
-    if (kind != NodeKind::Task || completed) return;
-    Stop();
-    completed = true;
-    completedAt = std::chrono::system_clock::now();
-}
-
-void TaskNode::Unset() {
-    if (kind != NodeKind::Task || !completed) return;
-    completed = false;
-    running = false;
-    completedAt = std::chrono::system_clock::time_point{};
-}
-
-std::chrono::seconds TaskNode::Elapsed() const {
-    if (kind != NodeKind::Task) return std::chrono::seconds{0};
-    if (!running) return accumulatedTime;
-    return accumulatedTime + std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - startedAt);
-}
-
-std::string TaskNode::ElapsedString() const {
-    return FormatDuration(Elapsed());
-}
-
-std::string TaskNode::CompletionString() const {
-    if (!completed) return "-";
-    const std::time_t time = std::chrono::system_clock::to_time_t(completedAt);
+std::string FormatTimePoint(TaskNode::SystemClock::time_point value) {
+    if (value.time_since_epoch() == TaskNode::SystemClock::duration::zero()) return "-";
+    const std::time_t time = TaskNode::SystemClock::to_time_t(value);
     std::tm local{};
 #ifdef _WIN32
     localtime_s(&local, &time);
@@ -70,6 +34,101 @@ std::string TaskNode::CompletionString() const {
     std::ostringstream stream;
     stream << std::put_time(&local, "%Y-%m-%d %H:%M");
     return stream.str();
+}
+
+} // namespace
+
+void TaskNode::Start() {
+    if (kind != NodeKind::Task || running || completed) return;
+    startedAt = Clock::now();
+    running = true;
+
+    SentinelShared::TimeFragment fragment;
+    fragment.startedAt = SystemClock::now();
+    timeFragments.push_back(fragment);
+}
+
+void TaskNode::Stop() {
+    if (kind != NodeKind::Task || !running) return;
+
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        Clock::now() - startedAt
+    );
+    accumulatedTime += elapsed;
+    running = false;
+
+    if (!timeFragments.empty() && timeFragments.back().IsOpen()) {
+        timeFragments.back().endedAt = SystemClock::now();
+        timeFragments.back().duration = elapsed;
+    }
+}
+
+void TaskNode::Complete() {
+    if (kind != NodeKind::Task || completed) return;
+    Stop();
+    completed = true;
+    completedAt = SystemClock::now();
+}
+
+void TaskNode::Unset() {
+    if (kind != NodeKind::Task || !completed) return;
+    completed = false;
+    running = false;
+    completedAt = SystemClock::time_point{};
+}
+
+void TaskNode::RestoreTiming(
+    std::chrono::seconds elapsed,
+    bool restoredCompleted,
+    bool restoredRunning,
+    SystemClock::time_point restoredCreatedAt,
+    SystemClock::time_point restoredCompletedAt,
+    std::vector<SentinelShared::TimeFragment> fragments
+) {
+    accumulatedTime = elapsed;
+    completed = restoredCompleted;
+    running = false;
+    createdAt = restoredCreatedAt;
+    completedAt = restoredCompletedAt;
+    timeFragments = std::move(fragments);
+
+    for (auto& fragment : timeFragments) {
+        if (fragment.IsOpen()) {
+            fragment.endedAt = fragment.startedAt + fragment.duration;
+        }
+    }
+
+    if (restoredRunning && !completed) Start();
+}
+
+std::chrono::seconds TaskNode::Elapsed() const {
+    if (kind != NodeKind::Task) return std::chrono::seconds{0};
+    if (!running) return accumulatedTime;
+    return accumulatedTime + std::chrono::duration_cast<std::chrono::seconds>(
+        Clock::now() - startedAt
+    );
+}
+
+std::vector<SentinelShared::TimeFragment> TaskNode::TimeFragments() const {
+    auto fragments = timeFragments;
+    if (running && !fragments.empty() && fragments.back().IsOpen()) {
+        fragments.back().duration = std::chrono::duration_cast<std::chrono::seconds>(
+            Clock::now() - startedAt
+        );
+    }
+    return fragments;
+}
+
+std::string TaskNode::ElapsedString() const {
+    return FormatDuration(Elapsed());
+}
+
+std::string TaskNode::CreatedString() const {
+    return FormatTimePoint(createdAt);
+}
+
+std::string TaskNode::CompletionString() const {
+    return completed ? FormatTimePoint(completedAt) : "-";
 }
 
 bool TaskTree::AddNode(
