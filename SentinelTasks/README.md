@@ -7,6 +7,8 @@ SentinelTasks is the tree-oriented terminal companion to Sentinel. The task tree
 - Folder/category nodes can contain folders or tasks.
 - Individual task nodes are leaves.
 - Every node has a user-defined ID, name, description, and optional foreground/background color override.
+- Task nodes also contain Sentinel-style elapsed-time, running, completed, and completion-time state.
+- Folder nodes are structural and do not run timers.
 - Tree relationships use terminal-safe ASCII connectors (`+-`, `` `- ``, and `|`).
 - Emoji markers are deliberately not part of the task model or command syntax.
 
@@ -17,6 +19,10 @@ addFolder <id> <parent|root> <name>
 addTask <id> <parent|root> <name>
 remove <id>
 setDescription <id> <description>
+start <task-id>
+stop <task-id>
+done <task-id>
+showTimes
 defineColor <name> rgb(r,g,b)
 color <foreground> bg <background>
 color <node-id> <foreground> bg <background>
@@ -29,15 +35,47 @@ quit
 
 Names, descriptions, IDs, and custom color names can be enclosed in double quotes when they contain spaces.
 
-Examples:
+## Task timers
+
+Task timers behave similarly to Sentinel:
 
 ```text
-addFolder work root "Programming"
-addFolder graphics work "Graphics programming"
-addTask opengl graphics "Study OpenGL"
-setDescription opengl "Read the rendering chapter and implement the examples."
-manualSelect opengl
+start opengl
+stop opengl
+start opengl
+done opengl
 ```
+
+`start` begins or resumes elapsed-time measurement, `stop` accumulates the current interval, and `done` stops the timer and records a completion timestamp. Completed task nodes cannot be restarted.
+
+The selected task's timing information is displayed in the right-side `Description / Timing` pane:
+
+```text
+ID: opengl
+Type: task
+Timer: 00:42:17   State: running
+Completed: -
+
+Study OpenGL
+Read the rendering chapter and implement the examples.
+```
+
+The tree also uses `[>]` for a running task and `[x]` for a completed task.
+
+Use:
+
+```text
+showTimes
+```
+
+to display every task ID with its current timer, state, and completion timestamp, for example:
+
+```text
+opengl  00:42:17  [running]  completed: -
+math    01:13:02  [done]     completed: 2026-08-09 16:40
+```
+
+Running timers update live because the ncurses loop refreshes continuously.
 
 ## Folder and task colors
 
@@ -92,29 +130,13 @@ Each RGB channel must be between 0 and 255. RGB values are mapped to the nearest
 
 ## GUI-style argument windows
 
-Entering an argument-taking command by itself opens its ncurses argument window. `addFolder` and `addTask` contain ID, parent, and name controls; there is no emoji field.
+Entering an argument-taking command by itself opens its ncurses argument window.
 
-```text
-> addTask
+`addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `select`, and `manualSelect` use an existing-node drop-list. `setDescription` uses a node drop-list and description text input.
 
-ID:      [ text input                          ]
-Parent:  [ root / existing folders          v ]
-Name:    [ text input                          ]
+`start`, `stop`, and `done` open a task-only drop-list. `defineColor` opens a color-name field plus an RGB text field. `color` opens a target drop-list (`default` plus existing node IDs) and foreground/background drop-lists populated from the built-in and currently defined named colors.
 
-                 [ Submit ]   [ Cancel ]
-```
-
-`remove`, `select`, and `manualSelect` use an existing-node drop-list. `setDescription` uses a node drop-list and description text input.
-
-`defineColor` opens a color-name field plus an RGB text field. `color` opens a target drop-list (`default` plus existing node IDs) and foreground/background drop-lists populated from the built-in and currently defined named colors.
-
-Inline CLI arguments remain supported:
-
-```text
-addTask opengl graphics "Study OpenGL"
-defineColor focus rgb(60,180,255)
-color opengl focus bg black
-```
+Inline CLI arguments remain supported.
 
 ## Controls
 
