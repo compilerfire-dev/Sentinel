@@ -106,7 +106,10 @@ bool TaskDataStore::Load(
             for (const auto& item : data["nodes"]) {
                 const std::string id = item.at("id").get<std::string>();
                 const std::string name = item.value("name", id);
-                const std::string parent = item.value("parent", std::string{});
+                std::string parent;
+                if (item.contains("parent") && item["parent"].is_string()) {
+                    parent = item["parent"].get<std::string>();
+                }
                 const std::string type = item.value("type", std::string{"task"});
                 const NodeKind kind = type == "folder" ? NodeKind::Folder : NodeKind::Task;
 
