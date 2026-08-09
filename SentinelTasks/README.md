@@ -25,6 +25,8 @@ start <task-id>
 stop <task-id>
 done <task-id>
 showTimes
+setJsonFile
+setJsonFile <path.json>
 defineColor <name> rgb(r,g,b)
 color <foreground> bg <background>
 color <node-id> <foreground> bg <background>
@@ -35,7 +37,28 @@ list
 quit
 ```
 
-Names, descriptions, IDs, and custom color names can be enclosed in double quotes when they contain spaces.
+Names, descriptions, IDs, paths, and custom color names can be enclosed in double quotes when they contain spaces.
+
+## JSON persistence and file selection
+
+SentinelTasks now loads and autosaves `current_data.json`. Its data is stored under the `sentinelTasks` object so unrelated Sentinel/statistics sections in the same JSON file are preserved.
+
+The persisted tree includes node hierarchy, names, descriptions, colors, named colors, elapsed task time, running/completed state, and completion timestamps.
+
+Enter:
+
+```text
+setJsonFile
+```
+
+to open the GTK native JSON file chooser. Selecting a file saves the current dataset first, loads the chosen file, and changes the active path shown in the SentinelTasks header.
+
+Direct switching remains available:
+
+```text
+setJsonFile demo/demo_data.json
+setJsonFile "projects/my tasks.json"
+```
 
 ## Embedded description editor
 
@@ -148,7 +171,7 @@ SentinelTasks also provides the built-in color family used by Sentinel.
 
 Other argument-taking commands can still open their ncurses argument windows when entered by name alone. `addFolder` and `addTask` contain ID, parent, and name controls. `remove`, `select`, and `manualSelect` use node drop-lists. `start`, `stop`, and `done` use task-only drop-lists. `defineColor` and `color` provide their color controls.
 
-`setDescription` is the exception: it uses the embedded right-pane editor described above.
+`setDescription` uses the embedded right-pane editor, while bare `setJsonFile` uses the desktop file chooser.
 
 ## Controls
 
@@ -168,7 +191,10 @@ Manual selection uses Up/Down for nodes, Left for parent, Right for first child,
 
 ## Build
 
+On Debian/Ubuntu/Linux Mint:
+
 ```bash
+sudo apt install libncurses-dev libgtk-3-dev pkg-config cmake g++
 cmake -S . -B build
 cmake --build build
 ./build/bin/SentinelTasks
