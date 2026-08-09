@@ -3,6 +3,7 @@
 #include "Color.hpp"
 #include "TaskTree.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -15,6 +16,7 @@ public:
         TaskTree& tree,
         TreeDisplaySettings& displaySettings,
         std::unordered_map<std::string, RgbColor>& definedColors,
+        std::chrono::seconds& autoSaveInterval,
         std::string& errorMessage
     ) const;
 
@@ -22,6 +24,7 @@ public:
         const TaskTree& tree,
         const TreeDisplaySettings& displaySettings,
         const std::unordered_map<std::string, RgbColor>& definedColors,
+        std::chrono::seconds autoSaveInterval,
         std::string& errorMessage
     ) const;
 
