@@ -9,6 +9,7 @@ Sentinel is a terminal productivity tracker written in C++20 using ncurses.
 - Interactive fuzzy command palette above the prompt.
 - Ranked fuzzy matching for commands, task IDs, and task names.
 - GUI-style ncurses popup argument windows for commands entered without arguments.
+- Native GTK file selection for `setJsonFile`.
 - Keyboard and mouse selection of fuzzy suggestions.
 - Command history recall with the Up/Down arrow keys.
 - Left/Right command-line cursor editing and mouse cursor placement.
@@ -31,6 +32,7 @@ done <id | fuzzy name>
 search <fuzzy text>
 list
 commands
+setJsonFile
 setJsonFile <json_file_path.json>
 defineColor <color-id> rgb(r,g,b)
 color <foreground> bg <background>
@@ -43,7 +45,7 @@ quit
 
 ## GUI-style argument windows
 
-Commands that require arguments can now be entered by command name alone. Sentinel opens a centered ncurses argument window and builds the same CLI command after you submit it.
+Commands that require arguments can be entered by command name alone. Sentinel opens a centered ncurses argument window and builds the same CLI command after you submit it.
 
 Examples:
 
@@ -54,12 +56,13 @@ start
 stop
 done
 search
-setJsonFile
 defineColor
 color
 ```
 
-`add` contains ID and Name text fields. `remove`, `start`, `stop`, and `done` use a task-ID drop-list. `search` provides a task/query selection. `setJsonFile` provides a JSON-path text field. `defineColor` provides color-name and RGB fields. `color` provides a target drop-list (`default` plus task IDs) and foreground/background color drop-lists populated with built-in and currently defined named colors.
+`add` contains ID and Name text fields. `remove`, `start`, `stop`, and `done` use a task-ID drop-list. `search` provides a query field. `defineColor` provides color-name and RGB fields. `color` provides a target drop-list (`default` plus task IDs) and foreground/background color drop-lists populated with built-in and currently defined named colors.
+
+`setJsonFile` is intentionally different: entering it without arguments opens the desktop GTK file chooser rather than an ncurses argument window.
 
 Popup controls:
 
@@ -74,11 +77,11 @@ Esc          cancel the form
 Mouse        focus fields and activate Submit/Cancel
 ```
 
-Inline CLI syntax remains fully supported, so the popup windows are optional.
+Inline CLI syntax remains fully supported, so the popup windows and native file chooser are optional.
 
 ## User-defined task IDs and quoting
 
-The number previously shown as the vector position is now replaced by a persistent ID supplied when the task is created.
+The number previously shown as the vector position is replaced by a persistent ID supplied when the task is created.
 
 Examples:
 
@@ -117,14 +120,13 @@ current_data.json
 
 If that file does not exist it is created automatically. Task mutations are saved immediately, running timers are periodically autosaved, and Sentinel saves once more when it exits.
 
-The JSON format stores tasks, per-task colors, and custom named colors:
+The traditional flat JSON format remains supported:
 
 ```json
 {
     "version": 3,
     "defined_colors": {
-        "focus": {"red": 60, "green": 180, "blue": 255},
-        "warning": {"red": 255, "green": 160, "blue": 40}
+        "focus": {"red": 60, "green": 180, "blue": 255}
     },
     "tasks": [
         {
@@ -133,26 +135,46 @@ The JSON format stores tasks, per-task colors, and custom named colors:
             "elapsed_seconds": 1250,
             "running": false,
             "completed": true,
-            "completed_at_epoch": 1786267800,
-            "color": {
-                "foreground": {"red": 60, "green": 180, "blue": 255},
-                "background": {"red": 0, "green": 0, "blue": 0}
-            }
+            "completed_at_epoch": 1786267800
         }
     ]
 }
 ```
 
-Older Sentinel JSON files remain loadable. Files without task IDs receive IDs based on their previous list positions, and files without `defined_colors` simply start with an empty custom-color registry.
+Sentinel also understands a shared namespaced form:
+
+```json
+{
+    "sentinel": {
+        "tasks": []
+    },
+    "sentinelTasks": {
+        "nodes": []
+    },
+    "statistics": {
+        "projects": []
+    }
+}
+```
+
+When saving, unrelated root sections are preserved rather than being discarded.
 
 ### Switching data files
+
+Open the native desktop file chooser with:
+
+```text
+setJsonFile
+```
+
+or switch directly:
 
 ```text
 setJsonFile projects/open_gl.json
 setJsonFile "projects/my data.json"
 ```
 
-Before switching, Sentinel saves the currently selected JSON file. It then loads the requested dataset. Named color definitions belong to the selected JSON dataset and switch with it.
+Before switching, Sentinel saves the currently selected JSON file. It then loads the requested dataset. Named color definitions belong to the selected Sentinel dataset and switch with it.
 
 ## Task colors
 
@@ -220,11 +242,11 @@ Custom names are stored in the active JSON file. A later `defineColor` with the 
 
 Each RGB channel must be from `0` through `255`. Per-task colors are stored as resolved RGB values, so a task keeps its assigned appearance even if the named color definition is later changed.
 
-When the terminal supports mutable ncurses colors and has enough color slots, Sentinel uses the requested RGB values for visible tasks. On more limited terminals it chooses the nearest standard terminal color.
+On terminals with limited palettes Sentinel chooses the nearest available terminal color for requested RGB values.
 
 ## Interactive command palette and history
 
-Start typing a command and Sentinel ranks matching commands directly above the command line. `defineColor` is included in the fuzzy command palette.
+Start typing a command and Sentinel ranks matching commands directly above the command line.
 
 Task-oriented commands display task suggestions as:
 
@@ -277,7 +299,7 @@ Task states:
 On Debian/Ubuntu/Linux Mint:
 
 ```bash
-sudo apt install libncurses-dev cmake g++
+sudo apt install libncurses-dev libgtk-3-dev pkg-config cmake g++
 cmake -S . -B build
 cmake --build build
 ./build/bin/Sentinel
