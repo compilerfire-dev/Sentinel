@@ -18,14 +18,20 @@ int main() {
             [](nlohmann::json& root, std::string& mutationError) {
                 root["sentinel"] = {
                     {"auto_save_seconds", 20},
-                    {"tasks", nlohmann::json::array({{{"id", "legacy-a"}, {"name", "A"}}})}
+                    {"tasks", nlohmann::json::array({
+                        nlohmann::json{{"id", "legacy-a"}, {"name", "A"}}
+                    })}
                 };
                 root["sentinelTasks"] = {
                     {"display", {{"foreground", {{"red", 255}}}}},
-                    {"nodes", nlohmann::json::array({{{"id", "legacy-b"}, {"type", "task"}}})}
+                    {"nodes", nlohmann::json::array({
+                        nlohmann::json{{"id", "legacy-b"}, {"type", "task"}}
+                    })}
                 };
                 root["statistics"] = {
-                    {"projects", nlohmann::json::array({{{"id", "keep-me"}}})}
+                    {"projects", nlohmann::json::array({
+                        nlohmann::json{{"id", "keep-me"}}
+                    })}
                 };
                 mutationError.clear();
                 return true;
