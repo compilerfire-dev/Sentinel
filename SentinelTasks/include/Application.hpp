@@ -1,8 +1,10 @@
 #pragma once
 
 #include "Color.hpp"
+#include "TaskDataStore.hpp"
 #include "TaskTree.hpp"
 
+#include <chrono>
 #include <cstddef>
 #include <iterator>
 #include <optional>
@@ -44,6 +46,12 @@ private:
     void HandleInput();
     void HandleMouse();
     void ExecuteCommand(const std::string& commandLine);
+
+    void PeriodicAutosave();
+    bool SaveCurrentData();
+    bool LoadCurrentData();
+    bool SetJsonFile(const std::string& path);
+    void OpenNativeJsonFilePicker();
 
     void Render();
     void RenderHeader();
@@ -87,7 +95,10 @@ private:
     std::vector<std::string> NodeIdOptions(bool foldersOnly, bool includeRoot) const;
     std::vector<std::string> TaskIdOptions() const;
     std::vector<std::string> ColorNameOptions() const;
-    std::optional<std::size_t> FindOptionIndex(const std::vector<std::string>& options, const std::string& value) const;
+    std::optional<std::size_t> FindOptionIndex(
+        const std::vector<std::string>& options,
+        const std::string& value
+    ) const;
 
     std::optional<RgbColor> ResolveColor(const std::string& value) const;
     bool DefineColor(const std::string& id, const std::string& rgbExpression);
@@ -103,6 +114,8 @@ private:
     TaskTree tree_;
     TreeDisplaySettings treeDisplaySettings_;
     std::unordered_map<std::string, RgbColor> definedColors_;
+    TaskDataStore dataStore_;
+    std::chrono::steady_clock::time_point lastAutosave_{std::chrono::steady_clock::now()};
 
     bool running_{true};
     bool manualSelect_{false};
