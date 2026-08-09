@@ -220,6 +220,16 @@ bool TaskDataStore::Load(
             canonicalOrder.push_back(id);
         }
 
+        SentinelShared::SharedTaskBaseline loadedBaseline;
+        std::string baselineError;
+        if (!SentinelShared::BuildSharedTaskBaseline(
+                root["sharedTasks"]["tasks"],
+                loadedBaseline,
+                baselineError)) {
+            errorMessage = baselineError;
+            return false;
+        }
+
         std::vector<json> taskPlacements;
         if (layout && layout->contains("nodes")) {
             if (!(*layout)["nodes"].is_array()) {
@@ -333,6 +343,7 @@ bool TaskDataStore::Load(
         }
 
         tree = std::move(loadedTree);
+        sharedTaskBaseline_ = std::move(loadedBaseline);
         displaySettings = loadedDisplay;
         definedColors = std::move(loadedColors);
         autoSaveInterval = loadedAutoSaveInterval;
@@ -365,7 +376,7 @@ bool TaskDataStore::Save(
     }
     layout["nodes"] = json::array();
 
-    json sharedTasks = json::array();
+    json localSharedTasks = json::array();
 
     for (const auto& visible : tree.Flatten()) {
         if (!visible.node) continue;
@@ -374,7 +385,7 @@ bool TaskDataStore::Save(
         if (node.kind == NodeKind::Task) {
             // Task state lives only in the canonical registry. The tree stores
             // only placement/description linkage using that same global ID.
-            sharedTasks.push_back(TaskNodeToSharedJson(node));
+            localSharedTasks.push_back(TaskNodeToSharedJson(node));
             layout["nodes"].push_back({
                 {"id", node.id},
                 {"type", "task"},
@@ -401,16 +412,27 @@ bool TaskDataStore::Save(
         layout["nodes"].push_back(std::move(folder));
     }
 
-    return SentinelShared::JsonDataStore::Update(
+    SentinelShared::SharedTaskBaseline nextBaseline;
+    const bool saved = SentinelShared::JsonDataStore::Update(
         path_,
-        [layout = std::move(layout), sharedTasks = std::move(sharedTasks)](
-            json& root,
-            std::string& mutationError
-        ) mutable {
-            root["sharedTasks"] = {
-                {"version", SentinelShared::SharedTaskWorldVersion},
-                {"tasks", std::move(sharedTasks)}
-            };
+        [layout = std::move(layout),
+         localSharedTasks = std::move(localSharedTasks),
+         this,
+         &nextBaseline](json& root, std::string& mutationError) mutable {
+            if (!root.contains("sharedTasks") || !root["sharedTasks"].is_object()) {
+                root["sharedTasks"] = json::object();
+            }
+            auto& shared = root["sharedTasks"];
+            shared["version"] = SentinelShared::SharedTaskWorldVersion;
+            if (!SentinelShared::MergeCanonicalTasks(
+                    shared,
+                    localSharedTasks,
+                    sharedTaskBaseline_,
+                    nextBaseline,
+                    mutationError)) {
+                return false;
+            }
+
             root["sentinelTasks"] = std::move(layout);
             if (root.contains("sentinel") && root["sentinel"].is_object()) {
                 root["sentinel"].erase("tasks");
@@ -421,6 +443,9 @@ bool TaskDataStore::Save(
         },
         errorMessage
     );
+
+    if (saved) sharedTaskBaseline_ = std::move(nextBaseline);
+    return saved;
 }
 
 void TaskDataStore::SetPath(std::filesystem::path path) {
