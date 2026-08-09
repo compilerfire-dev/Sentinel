@@ -26,6 +26,27 @@ RgbColor ColorFromJson(const json& value) {
     };
 }
 
+json FragmentToJson(const SentinelShared::TimeFragment& fragment) {
+    return {
+        {"started_at_epoch", SentinelShared::EpochSeconds(fragment.startedAt)},
+        {"ended_at_epoch", fragment.IsOpen() ? 0 : SentinelShared::EpochSeconds(fragment.endedAt)},
+        {"duration_seconds", fragment.duration.count()}
+    };
+}
+
+SentinelShared::TimeFragment FragmentFromJson(const json& value) {
+    SentinelShared::TimeFragment fragment;
+    const auto started = value.value("started_at_epoch", 0LL);
+    const auto ended = value.value("ended_at_epoch", 0LL);
+    const auto duration = std::max(0LL, value.value("duration_seconds", 0LL));
+    fragment.startedAt = SentinelShared::TimePointFromEpoch(started);
+    fragment.endedAt = ended > 0
+        ? SentinelShared::TimePointFromEpoch(ended)
+        : SentinelShared::TimeFragment::Clock::time_point{};
+    fragment.duration = std::chrono::seconds(duration);
+    return fragment;
+}
+
 const json* SentinelSectionForRead(const json& root) {
     if (root.contains("sentinel") && root["sentinel"].is_object() &&
         root["sentinel"].contains("tasks")) {
@@ -39,8 +60,6 @@ json* SentinelSectionForWrite(json& root) {
         return &root["sentinel"];
     }
 
-    // Keep legacy flat Sentinel-only files flat, but use the namespaced
-    // section as soon as this is clearly a shared Sentinel workspace file.
     if (root.contains("sentinelTasks") || root.contains("statistics") ||
         root.contains("shared")) {
         root["sentinel"] = json::object();
@@ -164,7 +183,7 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
         path,
         [&](json& root, std::string& mutationError) {
             json* section = SentinelSectionForWrite(root);
-            (*section)["version"] = 3;
+            (*section)["version"] = 4;
             (*section)["auto_save_seconds"] = autoSaveInterval_.count();
             (*section)["defined_colors"] = json::object();
             (*section)["tasks"] = json::array();
@@ -177,15 +196,24 @@ bool TaskManager::SaveNow(std::string& errorMessage) const {
                 const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(
                     task.GetCompletionTime().time_since_epoch()
                 ).count();
+                const auto createdEpoch = std::chrono::duration_cast<std::chrono::seconds>(
+                    task.GetCreatedTime().time_since_epoch()
+                ).count();
 
                 json item = {
                     {"id", task.GetId()},
                     {"name", task.GetName()},
+                    {"created_at_epoch", createdEpoch},
                     {"elapsed_seconds", task.GetElapsedTime().count()},
                     {"running", task.IsRunning()},
                     {"completed", task.IsCompleted()},
-                    {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0}
+                    {"completed_at_epoch", task.IsCompleted() ? completedEpoch : 0},
+                    {"time_fragments", json::array()}
                 };
+
+                for (const auto& fragment : task.GetTimeFragments()) {
+                    item["time_fragments"].push_back(FragmentToJson(fragment));
+                }
 
                 if (task.HasCustomColor()) {
                     item["color"] = {
@@ -224,8 +252,6 @@ bool TaskManager::Load(std::string& errorMessage) {
 
         const json& data = *SentinelSectionForRead(root);
         if (!data.contains("tasks")) {
-            // A shared file may legitimately exist before Sentinel has written
-            // its own section. Initialize Sentinel without disturbing the rest.
             tasks_.clear();
             definedColors_.clear();
             autoSaveInterval_ = std::chrono::seconds(1);
@@ -266,12 +292,25 @@ bool TaskManager::Load(std::string& errorMessage) {
             );
             const bool completed = item.value("completed", false);
             const bool running = item.value("running", false);
-            const auto epoch = item.value("completed_at_epoch", 0LL);
+            const auto createdEpoch = item.value("created_at_epoch", 0LL);
+            const auto completedEpoch = item.value("completed_at_epoch", 0LL);
+
+            std::vector<SentinelShared::TimeFragment> fragments;
+            if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
+                for (const auto& fragmentJson : item["time_fragments"]) {
+                    if (fragmentJson.is_object()) {
+                        fragments.push_back(FragmentFromJson(fragmentJson));
+                    }
+                }
+            }
+
             task.Restore(
                 elapsed,
                 completed,
                 running,
-                Task::SystemClock::time_point(std::chrono::seconds(epoch))
+                SentinelShared::TimePointFromEpoch(createdEpoch),
+                SentinelShared::TimePointFromEpoch(completedEpoch),
+                std::move(fragments)
             );
 
             if (item.contains("color")) {
