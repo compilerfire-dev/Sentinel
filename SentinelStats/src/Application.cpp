@@ -6,6 +6,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
+#include <string>
 #include <vector>
 
 namespace {
@@ -36,6 +37,25 @@ std::string FormatDate(std::int64_t epoch) {
     std::ostringstream stream;
     stream << std::put_time(&local, "%Y-%m-%d");
     return stream.str();
+}
+
+std::string FormatDateTime(std::int64_t epoch) {
+    const std::time_t value = static_cast<std::time_t>(epoch);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local, &value);
+#else
+    localtime_r(&value, &local);
+#endif
+    std::ostringstream stream;
+    stream << std::put_time(&local, "%Y-%m-%d %H:%M");
+    return stream.str();
+}
+
+std::string Shorten(std::string value, std::size_t maximum) {
+    if (value.size() <= maximum) return value;
+    if (maximum <= 3) return value.substr(0, maximum);
+    return value.substr(0, maximum - 3) + "...";
 }
 
 void SetSourceHex(cairo_t* cr, double r, double g, double b) {
@@ -106,11 +126,6 @@ void DrawAxes(
     DrawText(cr, 10, 18, yLabel, 11.0);
 }
 
-std::pair<std::int64_t, std::int64_t> XRange(const std::vector<TimePointValue>& points) {
-    if (points.empty()) return {0, 0};
-    return {points.front().epochSeconds, points.back().epochSeconds};
-}
-
 void DrawLineSeries(
     cairo_t* cr,
     const std::vector<TimePointValue>& points,
@@ -128,7 +143,7 @@ void DrawLineSeries(
 
     const double plotWidth = std::max(1.0, width - bounds.left - bounds.right);
     const double plotHeight = std::max(1.0, height - bounds.top - bounds.bottom);
-    const double xSpan = std::max<std::int64_t>(1, maxX - minX);
+    const double xSpan = static_cast<double>(std::max<std::int64_t>(1, maxX - minX));
     maxY = std::max(1.0, maxY);
 
     SetSourceHex(cr, red, green, blue);
@@ -136,7 +151,8 @@ void DrawLineSeries(
 
     bool first = true;
     for (const auto& point : points) {
-        const double x = bounds.left + (point.epochSeconds - minX) / xSpan * plotWidth;
+        const double x = bounds.left +
+            static_cast<double>(point.epochSeconds - minX) / xSpan * plotWidth;
         const double y = bounds.top + (1.0 - point.value / maxY) * plotHeight;
         if (first) {
             cairo_move_to(cr, x, y);
@@ -148,7 +164,8 @@ void DrawLineSeries(
     cairo_stroke(cr);
 
     for (const auto& point : points) {
-        const double x = bounds.left + (point.epochSeconds - minX) / xSpan * plotWidth;
+        const double x = bounds.left +
+            static_cast<double>(point.epochSeconds - minX) / xSpan * plotWidth;
         const double y = bounds.top + (1.0 - point.value / maxY) * plotHeight;
         cairo_arc(cr, x, y, 3.0, 0.0, 2.0 * 3.14159265358979323846);
         cairo_fill(cr);
@@ -194,11 +211,10 @@ int Application::Run(int argc, char** argv) {
     );
     g_signal_connect(app, "activate", G_CALLBACK(OnActivate), this);
 
-    // SentinelStats consumes the optional JSON path itself. Passing that path
-    // to g_application_run() would make GApplication interpret it as a file
-    // open request, which requires G_APPLICATION_HANDLES_OPEN and an "open"
-    // signal handler. Run GTK with only argv[0] instead.
-    char* gtkArgv[] = { (argc > 0 && argv && argv[0]) ? argv[0] : const_cast<char*>("SentinelStats"), nullptr };
+    char* gtkArgv[] = {
+        (argc > 0 && argv && argv[0]) ? argv[0] : const_cast<char*>("SentinelStats"),
+        nullptr
+    };
     const int result = g_application_run(G_APPLICATION(app), 1, gtkArgv);
 
     g_object_unref(app);
@@ -218,7 +234,12 @@ void Application::OnReloadClicked(GtkButton*, gpointer userData) {
 }
 
 gboolean Application::OnTasksDraw(GtkWidget* widget, cairo_t* cr, gpointer userData) {
-    static_cast<Application*>(userData)->DrawCompletedTasks(widget, cr);
+    static_cast<Application*>(userData)->DrawTaskProgression(widget, cr);
+    return FALSE;
+}
+
+gboolean Application::OnFragmentsDraw(GtkWidget* widget, cairo_t* cr, gpointer userData) {
+    static_cast<Application*>(userData)->DrawTaskFragments(widget, cr);
     return FALSE;
 }
 
@@ -251,10 +272,11 @@ void Application::BuildWindow(GtkApplication* app) {
     g_signal_connect(openButton, "clicked", G_CALLBACK(OnOpenClicked), this);
     g_signal_connect(reloadButton, "clicked", G_CALLBACK(OnReloadClicked), this);
 
-    GtkWidget* metrics = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 36);
+    GtkWidget* metrics = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 28);
     gtk_box_pack_start(GTK_BOX(metrics), CreateMetric("Total tasks", &totalTasksLabel_), TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(metrics), CreateMetric("Completed", &completedTasksLabel_), TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(metrics), CreateMetric("Tracked time", &trackedTimeLabel_), TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(metrics), CreateMetric("Fragments", &fragmentsLabel_), TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(metrics), CreateMetric("Projects", &projectCountLabel_), TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(root), metrics, FALSE, FALSE, 4);
 
@@ -264,12 +286,36 @@ void Application::BuildWindow(GtkApplication* app) {
 
     tasksDrawingArea_ = gtk_drawing_area_new();
     gtk_widget_set_size_request(tasksDrawingArea_, -1, 520);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), tasksDrawingArea_, gtk_label_new("Task progression"));
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        tasksDrawingArea_,
+        gtk_label_new("Task progression")
+    );
     g_signal_connect(tasksDrawingArea_, "draw", G_CALLBACK(OnTasksDraw), this);
+
+    GtkWidget* fragmentScroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(
+        GTK_SCROLLED_WINDOW(fragmentScroll),
+        GTK_POLICY_AUTOMATIC,
+        GTK_POLICY_AUTOMATIC
+    );
+    fragmentsDrawingArea_ = gtk_drawing_area_new();
+    gtk_widget_set_size_request(fragmentsDrawingArea_, -1, 520);
+    gtk_container_add(GTK_CONTAINER(fragmentScroll), fragmentsDrawingArea_);
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        fragmentScroll,
+        gtk_label_new("Time fragments")
+    );
+    g_signal_connect(fragmentsDrawingArea_, "draw", G_CALLBACK(OnFragmentsDraw), this);
 
     locDrawingArea_ = gtk_drawing_area_new();
     gtk_widget_set_size_request(locDrawingArea_, -1, 520);
-    gtk_notebook_append_page(GTK_NOTEBOOK(notebook), locDrawingArea_, gtk_label_new("Lines of code"));
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        locDrawingArea_,
+        gtk_label_new("Lines of code")
+    );
     g_signal_connect(locDrawingArea_, "draw", G_CALLBACK(OnLocDraw), this);
 
     statusLabel_ = gtk_label_new("");
@@ -335,46 +381,218 @@ void Application::RefreshLabels() {
     completed << snapshot.completedTasks << " / " << snapshot.totalTasks;
     gtk_label_set_text(GTK_LABEL(completedTasksLabel_), completed.str().c_str());
     gtk_label_set_text(GTK_LABEL(trackedTimeLabel_), FormatDuration(snapshot.totalTrackedSeconds).c_str());
+    gtk_label_set_text(GTK_LABEL(fragmentsLabel_), std::to_string(snapshot.totalFragments).c_str());
     gtk_label_set_text(GTK_LABEL(projectCountLabel_), std::to_string(snapshot.projects.size()).c_str());
 
     std::ostringstream status;
     status << "Loaded " << snapshot.totalTasks << " tasks; "
+           << snapshot.createdTaskHistory.size() << " timestamped creations; "
            << snapshot.completedTaskHistory.size() << " timestamped completions; "
+           << snapshot.totalFragments << " measured fragments; "
            << snapshot.projects.size() << " project series.";
     gtk_label_set_text(GTK_LABEL(statusLabel_), status.str().c_str());
 }
 
 void Application::QueueCharts() {
     if (tasksDrawingArea_) gtk_widget_queue_draw(tasksDrawingArea_);
+    if (fragmentsDrawingArea_) {
+        const int desiredHeight = std::max(
+            520,
+            110 + static_cast<int>(data_.Snapshot().taskFragments.size()) * 30
+        );
+        gtk_widget_set_size_request(fragmentsDrawingArea_, -1, desiredHeight);
+        gtk_widget_queue_draw(fragmentsDrawingArea_);
+    }
     if (locDrawingArea_) gtk_widget_queue_draw(locDrawingArea_);
 }
 
-void Application::DrawCompletedTasks(GtkWidget* widget, cairo_t* cr) const {
-    const GtkAllocation allocation = [&]() {
-        GtkAllocation value{};
-        gtk_widget_get_allocation(widget, &value);
-        return value;
-    }();
+void Application::DrawTaskProgression(GtkWidget* widget, cairo_t* cr) const {
+    GtkAllocation allocation{};
+    gtk_widget_get_allocation(widget, &allocation);
 
-    const auto& points = data_.Snapshot().completedTaskHistory;
+    const auto& created = data_.Snapshot().createdTaskHistory;
+    const auto& completed = data_.Snapshot().completedTaskHistory;
+
     SetSourceHex(cr, 1.0, 1.0, 1.0);
     cairo_paint(cr);
-
     SetSourceHex(cr, 0.12, 0.12, 0.12);
-    DrawText(cr, 18, 22, "Cumulative completed tasks", 16.0);
+    DrawText(cr, 18, 22, "Task creation and completion progression", 16.0);
 
-    if (points.empty()) {
-        DrawEmptyMessage(cr, allocation.width, allocation.height, "No timestamped completed tasks in this JSON file.");
+    if (created.empty() && completed.empty()) {
+        DrawEmptyMessage(
+            cr,
+            allocation.width,
+            allocation.height,
+            "No task creation/completion timestamps in this JSON file."
+        );
         return;
     }
 
-    const auto [minX, maxX] = XRange(points);
+    std::int64_t minX = 0;
+    std::int64_t maxX = 0;
+    bool rangeInitialized = false;
     double maxY = 1.0;
-    for (const auto& point : points) maxY = std::max(maxY, point.value);
 
-    const PlotBounds bounds;
-    DrawAxes(cr, allocation.width, allocation.height, bounds, maxY, minX, maxX, "Completed tasks");
-    DrawLineSeries(cr, points, allocation.width, allocation.height, bounds, minX, maxX, maxY, 0.18, 0.49, 0.79);
+    const auto includeSeries = [&](const std::vector<TimePointValue>& points) {
+        if (points.empty()) return;
+        if (!rangeInitialized) {
+            minX = points.front().epochSeconds;
+            maxX = points.back().epochSeconds;
+            rangeInitialized = true;
+        } else {
+            minX = std::min(minX, points.front().epochSeconds);
+            maxX = std::max(maxX, points.back().epochSeconds);
+        }
+        for (const auto& point : points) maxY = std::max(maxY, point.value);
+    };
+    includeSeries(created);
+    includeSeries(completed);
+
+    PlotBounds bounds;
+    bounds.top = 56.0;
+    DrawAxes(
+        cr,
+        allocation.width,
+        allocation.height,
+        bounds,
+        maxY,
+        minX,
+        maxX,
+        "Tasks"
+    );
+
+    DrawLineSeries(
+        cr, created, allocation.width, allocation.height, bounds,
+        minX, maxX, maxY, 0.20, 0.62, 0.42
+    );
+    DrawLineSeries(
+        cr, completed, allocation.width, allocation.height, bounds,
+        minX, maxX, maxY, 0.18, 0.49, 0.79
+    );
+
+    SetSourceHex(cr, 0.20, 0.62, 0.42);
+    cairo_rectangle(cr, 18, 38, 18, 4);
+    cairo_fill(cr);
+    SetSourceHex(cr, 0.15, 0.15, 0.15);
+    DrawText(cr, 42, 44, "Created", 11.0);
+
+    SetSourceHex(cr, 0.18, 0.49, 0.79);
+    cairo_rectangle(cr, 112, 38, 18, 4);
+    cairo_fill(cr);
+    SetSourceHex(cr, 0.15, 0.15, 0.15);
+    DrawText(cr, 136, 44, "Completed", 11.0);
+}
+
+void Application::DrawTaskFragments(GtkWidget* widget, cairo_t* cr) const {
+    GtkAllocation allocation{};
+    gtk_widget_get_allocation(widget, &allocation);
+
+    SetSourceHex(cr, 1.0, 1.0, 1.0);
+    cairo_paint(cr);
+    SetSourceHex(cr, 0.12, 0.12, 0.12);
+    DrawText(cr, 18, 22, "Measured task time fragments", 16.0);
+    SetSourceHex(cr, 0.35, 0.35, 0.35);
+    DrawText(
+        cr,
+        18,
+        42,
+        "Each bar is one continuous start -> stop/done session. A circle marks a fragment that was open at the last save.",
+        11.0
+    );
+
+    const auto& series = data_.Snapshot().taskFragments;
+    if (series.empty()) {
+        DrawEmptyMessage(
+            cr,
+            allocation.width,
+            allocation.height,
+            "No time_fragments data yet. Start and stop a task to create fragments."
+        );
+        return;
+    }
+
+    std::int64_t minX = series.front().fragments.front().startedAtEpoch;
+    std::int64_t maxX = series.front().fragments.front().endedAtEpoch;
+    for (const auto& task : series) {
+        for (const auto& fragment : task.fragments) {
+            minX = std::min(minX, fragment.startedAtEpoch);
+            maxX = std::max(maxX, fragment.endedAtEpoch);
+        }
+    }
+    if (maxX <= minX) maxX = minX + 1;
+
+    constexpr double left = 230.0;
+    constexpr double right = 28.0;
+    constexpr double top = 70.0;
+    constexpr double rowHeight = 30.0;
+    constexpr double barHeight = 10.0;
+    const double plotWidth = std::max(1.0, allocation.width - left - right);
+    const double xSpan = static_cast<double>(maxX - minX);
+    const double rowsBottom = top + series.size() * rowHeight;
+
+    const int gridLines = 5;
+    for (int index = 0; index <= gridLines; ++index) {
+        const double ratio = static_cast<double>(index) / gridLines;
+        const double x = left + ratio * plotWidth;
+        SetSourceHex(cr, 0.90, 0.90, 0.90);
+        cairo_move_to(cr, x, top - 8);
+        cairo_line_to(cr, x, rowsBottom);
+        cairo_stroke(cr);
+
+        const auto epoch = minX + static_cast<std::int64_t>(ratio * (maxX - minX));
+        SetSourceHex(cr, 0.35, 0.35, 0.35);
+        DrawText(cr, x + 3, top - 12, FormatDateTime(epoch), 9.0);
+    }
+
+    for (std::size_t index = 0; index < series.size(); ++index) {
+        const auto& task = series[index];
+        const double y = top + index * rowHeight + rowHeight / 2.0;
+        const auto color = SeriesColors[index % SeriesColors.size()];
+
+        SetSourceHex(cr, 0.18, 0.18, 0.18);
+        const std::string label = Shorten(
+            task.source + " | " + (task.name.empty() ? task.id : task.name),
+            34
+        );
+        DrawText(cr, 12, y + 4, label, 11.0);
+
+        SetSourceHex(cr, 0.92, 0.92, 0.92);
+        cairo_move_to(cr, left, y);
+        cairo_line_to(cr, left + plotWidth, y);
+        cairo_stroke(cr);
+
+        for (const auto& fragment : task.fragments) {
+            const double startX = left +
+                static_cast<double>(fragment.startedAtEpoch - minX) / xSpan * plotWidth;
+            const double endX = left +
+                static_cast<double>(fragment.endedAtEpoch - minX) / xSpan * plotWidth;
+            const double width = std::max(3.0, endX - startX);
+
+            SetSourceHex(cr, color[0], color[1], color[2]);
+            cairo_rectangle(cr, startX, y - barHeight / 2.0, width, barHeight);
+            cairo_fill(cr);
+
+            if (fragment.open) {
+                cairo_arc(
+                    cr,
+                    startX + width,
+                    y,
+                    4.5,
+                    0.0,
+                    2.0 * 3.14159265358979323846
+                );
+                cairo_fill(cr);
+            }
+        }
+    }
+
+    SetSourceHex(cr, 0.25, 0.25, 0.25);
+    DrawText(cr, left, rowsBottom + 26, FormatDateTime(minX), 10.0);
+    const std::string last = FormatDateTime(maxX);
+    cairo_text_extents_t extents{};
+    cairo_set_font_size(cr, 10.0);
+    cairo_text_extents(cr, last.c_str(), &extents);
+    DrawText(cr, left + plotWidth - extents.width, rowsBottom + 26, last, 10.0);
 }
 
 void Application::DrawProjectLoc(GtkWidget* widget, cairo_t* cr) const {
@@ -391,7 +609,12 @@ void Application::DrawProjectLoc(GtkWidget* widget, cairo_t* cr) const {
         if (!project.locHistory.empty()) projects.push_back(&project);
     }
     if (projects.empty()) {
-        DrawEmptyMessage(cr, allocation.width, allocation.height, "No project loc_history data in this JSON file.");
+        DrawEmptyMessage(
+            cr,
+            allocation.width,
+            allocation.height,
+            "No project loc_history data in this JSON file."
+        );
         return;
     }
 
@@ -406,7 +629,16 @@ void Application::DrawProjectLoc(GtkWidget* widget, cairo_t* cr) const {
 
     PlotBounds bounds;
     bounds.top = 48.0;
-    DrawAxes(cr, allocation.width, allocation.height, bounds, maxY, minX, maxX, "Lines of code");
+    DrawAxes(
+        cr,
+        allocation.width,
+        allocation.height,
+        bounds,
+        maxY,
+        minX,
+        maxX,
+        "Lines of code"
+    );
 
     for (std::size_t index = 0; index < projects.size(); ++index) {
         const auto color = SeriesColors[index % SeriesColors.size()];
