@@ -10,9 +10,11 @@ Sentinel is a terminal productivity tracker written in C++20 using ncurses.
 - Ranked fuzzy matching for commands, task IDs, and task names.
 - Keyboard and mouse selection of fuzzy suggestions.
 - Command history recall with the Up/Down arrow keys.
+- Left/Right command-line cursor editing and mouse cursor placement.
 - Automatic JSON persistence using the vendored `nlohmann::json` header.
 - Runtime switching between JSON data files.
-- Default task-row RGB colors plus per-task color overrides.
+- Default task-row colors plus per-task color overrides.
+- Built-in named colors and user-defined named RGB colors.
 
 ## Commands
 
@@ -29,8 +31,9 @@ search <fuzzy text>
 list
 commands
 setJsonFile <json_file_path.json>
-color rgb(r,g,b) bg rgb(r,g,b)
-color <id> rgb(r,g,b) bg rgb(r,g,b)
+defineColor <color-id> rgb(r,g,b)
+color <foreground> bg <background>
+color <task-id> <foreground> bg <background>
 help
 quit
 ```
@@ -39,7 +42,7 @@ quit
 
 ## User-defined task IDs and quoting
 
-The number previously shown as the vector position is now replaced by a persistent ID supplied by you when the task is created.
+The number previously shown as the vector position is now replaced by a persistent ID supplied when the task is created.
 
 Examples:
 
@@ -78,11 +81,15 @@ current_data.json
 
 If that file does not exist it is created automatically. Task mutations are saved immediately, running timers are periodically autosaved, and Sentinel saves once more when it exits.
 
-The JSON format now stores the user-defined ID and optional per-task colors:
+The JSON format stores tasks, per-task colors, and custom named colors:
 
 ```json
 {
-    "version": 2,
+    "version": 3,
+    "defined_colors": {
+        "focus": {"red": 60, "green": 180, "blue": 255},
+        "warning": {"red": 255, "green": 160, "blue": 40}
+    },
     "tasks": [
         {
             "id": "math",
@@ -92,7 +99,7 @@ The JSON format now stores the user-defined ID and optional per-task colors:
             "completed": true,
             "completed_at_epoch": 1786267800,
             "color": {
-                "foreground": {"red": 0, "green": 255, "blue": 0},
+                "foreground": {"red": 60, "green": 180, "blue": 255},
                 "background": {"red": 0, "green": 0, "blue": 0}
             }
         }
@@ -100,7 +107,7 @@ The JSON format now stores the user-defined ID and optional per-task colors:
 }
 ```
 
-Older Sentinel JSON files without an `id` field are still loadable; Sentinel assigns IDs based on their previous list positions during migration.
+Older Sentinel JSON files remain loadable. Files without task IDs receive IDs based on their previous list positions, and files without `defined_colors` simply start with an empty custom-color registry.
 
 ### Switching data files
 
@@ -109,36 +116,81 @@ setJsonFile projects/open_gl.json
 setJsonFile "projects/my data.json"
 ```
 
-Before switching, Sentinel saves the currently selected JSON file. It then clears the in-memory task list and selects the requested path.
-
-If the selected file exists, its tasks are loaded. If it does not exist, Sentinel creates a fresh JSON file with an empty task list.
-
-The currently selected JSON file is shown in Sentinel's header.
+Before switching, Sentinel saves the currently selected JSON file. It then loads the requested dataset. Named color definitions belong to the selected JSON dataset and switch with it.
 
 ## Task colors
 
 The `color` command affects task rows only. The header, fuzzy palette, status text, and command prompt remain in the terminal's normal colors.
 
-Set the default color for all tasks without an override:
+### Built-in color names
+
+Sentinel includes these named colors:
+
+```text
+black
+red
+green
+yellow
+blue
+magenta
+cyan
+white
+brightBlack / gray / grey
+brightRed
+brightGreen
+brightYellow
+brightBlue
+brightMagenta
+brightCyan
+brightWhite
+```
+
+Name matching ignores capitalization and separators such as `_` or `-`, so `bright_red`, `BrightRed`, and `bright-red` resolve to the same built-in color.
+
+Use named colors directly:
+
+```text
+color white bg black
+color math brightGreen bg black
+color "linear algebra" cyan bg blue
+```
+
+Direct RGB remains available:
 
 ```text
 color rgb(255,255,255) bg rgb(0,0,0)
+color math rgb(0,255,0) bg rgb(0,0,0)
 ```
 
-Set a color for a particular task ID:
+### Defining custom named colors
+
+Create or replace a named color with:
 
 ```text
-color math rgb(0,255,0) bg rgb(0,0,0)
-color "linear algebra" rgb(255,210,120) bg rgb(20,20,40)
+defineColor focus rgb(60,180,255)
+defineColor warning rgb(255,160,40)
+defineColor "deep blue" rgb(25,50,120)
 ```
 
-Each RGB channel must be from `0` through `255`. Per-task colors are saved to the active JSON file.
+Then use those names anywhere a color value is accepted:
+
+```text
+color focus bg black
+color math warning bg black
+color "linear algebra" "deep blue" bg white
+```
+
+Custom names are stored in the active JSON file. A later `defineColor` with the same ID replaces the previous RGB value.
+
+Each RGB channel must be from `0` through `255`. Per-task colors are stored as resolved RGB values, so a task keeps its assigned appearance even if the named color definition is later changed.
 
 When the terminal supports mutable ncurses colors and has enough color slots, Sentinel uses the requested RGB values for visible tasks. On more limited terminals it chooses the nearest standard terminal color.
 
 ## Interactive command palette and history
 
-Start typing a command and Sentinel ranks matching commands directly above the command line. Task-oriented commands display task suggestions as:
+Start typing a command and Sentinel ranks matching commands directly above the command line. `defineColor` is included in the fuzzy command palette.
+
+Task-oriented commands display task suggestions as:
 
 ```text
 math  -  Study linear algebra
@@ -150,14 +202,14 @@ Choosing a suggestion inserts its task ID, quoting it automatically when the ID 
 Controls:
 
 ```text
-Tab       accept the highlighted suggestion
-Down      begin navigating fuzzy suggestions / move downward
-Up        recall the previous command when not navigating suggestions
-Up/Down   navigate suggestions once suggestion navigation is active
-Up/Down   move backward/forward through command history while browsing history
-Enter     execute normally, or accept after suggestion navigation
-Mouse     click a suggestion to accept it
-Backspace edit the current command
+Tab        accept the highlighted suggestion
+Down       begin navigating fuzzy suggestions / move downward
+Up         recall the previous command when not navigating suggestions
+Up/Down    navigate suggestions once suggestion navigation is active
+Left/Right move the command-line cursor
+Mouse      click command line to position cursor; click suggestion to accept it
+Enter      execute normally, or accept after suggestion navigation
+Backspace  delete the character before the cursor
 ```
 
 ## Fuzzy matching
