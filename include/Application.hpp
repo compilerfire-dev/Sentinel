@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -24,6 +25,10 @@ private:
     void HandleMouse();
     void AcceptSuggestion(const std::vector<Suggestion>& suggestions);
     void ResetSuggestionSelection();
+    void AddCommandToHistory(const std::string& command);
+    void RecallPreviousCommand();
+    void RecallNextCommand();
+    void ResetHistoryNavigation();
     void PeriodicAutosave();
     void ApplyColors();
 
@@ -45,6 +50,9 @@ private:
     CommandProcessor commandProcessor_;
     std::string commandBuffer_;
     std::string persistenceStatus_;
+    std::vector<std::string> commandHistory_;
+    std::optional<std::size_t> historyIndex_;
+    std::string commandBeforeHistory_;
     std::size_t selectedSuggestion_{0};
     bool navigatingSuggestions_{false};
     std::chrono::steady_clock::time_point lastAutosave_{};
