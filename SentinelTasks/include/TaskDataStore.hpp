@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Color.hpp"
+#include "SharedTaskMerge.hpp"
 #include "TaskTree.hpp"
 
 #include <chrono>
@@ -33,4 +34,5 @@ public:
 
 private:
     std::filesystem::path path_;
+    mutable SentinelShared::SharedTaskBaseline sharedTaskBaseline_;
 };
