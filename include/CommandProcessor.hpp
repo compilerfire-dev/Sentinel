@@ -20,7 +20,9 @@ public:
 
 private:
     std::optional<std::size_t> ResolveTaskReference(const std::string& value);
+    std::optional<RgbColor> ResolveColorValue(const std::string& value) const;
     bool ParseColorCommand(const std::string& argument);
+    bool ParseDefineColorCommand(const std::string& argument);
     void Autosave();
 
     TaskManager& manager_;
