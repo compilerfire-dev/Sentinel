@@ -21,6 +21,25 @@ private:
         std::string replacement;
     };
 
+    enum class DialogFieldKind { TextInput, DropList };
+
+    struct DialogField {
+        std::string label;
+        DialogFieldKind kind{DialogFieldKind::TextInput};
+        std::string value;
+        std::size_t cursor{0};
+        std::vector<std::string> options;
+        std::size_t selectedOption{0};
+    };
+
+    struct CommandDialog {
+        std::string command;
+        std::string title;
+        std::vector<DialogField> fields;
+        std::size_t focusedControl{0};
+        std::string validationMessage;
+    };
+
     void HandleInput();
     void HandleMouse();
     void AcceptSuggestion(const std::vector<Suggestion>& suggestions);
@@ -32,12 +51,24 @@ private:
     void PeriodicAutosave();
     void ApplyColors();
 
+    bool OpenCommandDialog(const std::string& command);
+    void CloseCommandDialog();
+    void HandleCommandDialogInput(int key);
+    void HandleCommandDialogMouse(int mouseX, int mouseY);
+    void MoveDialogFocus(int delta);
+    bool SubmitCommandDialog();
+    std::string BuildDialogCommand() const;
+    std::vector<std::string> TaskIdOptions() const;
+    std::vector<std::string> ColorNameOptions() const;
+    static std::string QuoteArgument(const std::string& value);
+
     void Render();
     void RenderHeader();
     void RenderTasks();
     void RenderSuggestions(const std::vector<Suggestion>& suggestions);
     void RenderStatus();
     void RenderCommandLine();
+    void RenderCommandDialog();
 
     std::vector<Suggestion> BuildSuggestions() const;
     std::vector<std::size_t> VisibleTaskIndices() const;
@@ -56,5 +87,6 @@ private:
     std::string commandBeforeHistory_;
     std::size_t selectedSuggestion_{0};
     bool navigatingSuggestions_{false};
+    std::optional<CommandDialog> commandDialog_;
     std::chrono::steady_clock::time_point lastAutosave_{};
 };
