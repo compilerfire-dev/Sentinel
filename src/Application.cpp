@@ -59,84 +59,106 @@ std::string QuoteIfNeeded(const std::string& value) {
 }
 
 short NearestBasicColor(const RgbColor& color) {
-    struct BasicColor { short ncursesColor; int red; int green; int blue; };
+    struct BasicColor {
+        short ncursesColor;
+        int red;
+        int green;
+        int blue;
+    };
+
     constexpr std::array<BasicColor, 8> basic{{
-        {COLOR_BLACK, 0, 0, 0}, {COLOR_RED, 255, 0, 0},
-        {COLOR_GREEN, 0, 255, 0}, {COLOR_YELLOW, 255, 255, 0},
-        {COLOR_BLUE, 0, 0, 255}, {COLOR_MAGENTA, 255, 0, 255},
-        {COLOR_CYAN, 0, 255, 255}, {COLOR_WHITE, 255, 255, 255},
+        {COLOR_BLACK, 0, 0, 0},
+        {COLOR_RED, 255, 0, 0},
+        {COLOR_GREEN, 0, 255, 0},
+        {COLOR_YELLOW, 255, 255, 0},
+        {COLOR_BLUE, 0, 0, 255},
+        {COLOR_MAGENTA, 255, 0, 255},
+        {COLOR_CYAN, 0, 255, 255},
+        {COLOR_WHITE, 255, 255, 255},
     }};
 
     long bestDistance = std::numeric_limits<long>::max();
     short best = COLOR_WHITE;
+
     for (const auto& candidate : basic) {
         const long dr = color.red - candidate.red;
         const long dg = color.green - candidate.green;
         const long db = color.blue - candidate.blue;
         const long distance = dr * dr + dg * dg + db * db;
+
         if (distance < bestDistance) {
             bestDistance = distance;
             best = candidate.ncursesColor;
         }
     }
+
     return best;
 }
 
-short ToNcursesComponent(int value) {
-    return static_cast<short>((value * 1000) / 255);
+short NearestTerminalColor(const RgbColor& color) {
+    if (!has_colors() || COLORS <= 0) {
+        return NearestBasicColor(color);
+    }
+
+    // Do not redefine the terminal's palette with init_color(). Instead,
+    // inspect the palette ncurses already exposes and select the closest
+    // foreground/background entry independently. This is considerably more
+    // portable across xterm-compatible and fixed-palette terminals.
+    const int colorLimit = std::min(
+        COLORS,
+        static_cast<int>(std::numeric_limits<short>::max()) + 1
+    );
+
+    long bestDistance = std::numeric_limits<long>::max();
+    short best = NearestBasicColor(color);
+    bool found = false;
+
+    for (int index = 0; index < colorLimit; ++index) {
+        short red = 0;
+        short green = 0;
+        short blue = 0;
+
+        if (color_content(
+                static_cast<short>(index),
+                &red,
+                &green,
+                &blue
+            ) == ERR) {
+            continue;
+        }
+
+        const int candidateRed = static_cast<int>(red) * 255 / 1000;
+        const int candidateGreen = static_cast<int>(green) * 255 / 1000;
+        const int candidateBlue = static_cast<int>(blue) * 255 / 1000;
+
+        const long dr = color.red - candidateRed;
+        const long dg = color.green - candidateGreen;
+        const long db = color.blue - candidateBlue;
+        const long distance = dr * dr + dg * dg + db * db;
+
+        if (!found || distance < bestDistance) {
+            found = true;
+            bestDistance = distance;
+            best = static_cast<short>(index);
+        }
+    }
+
+    return best;
 }
 
-bool TryInitializeRgbColor(short slot, const RgbColor& color) {
-    if (!can_change_color() || slot < 0 || slot >= COLORS) return false;
-    return init_color(
-        slot,
-        ToNcursesComponent(color.red),
-        ToNcursesComponent(color.green),
-        ToNcursesComponent(color.blue)
-    ) != ERR;
-}
-
-bool TryInitializeRgbPair(
+bool InitializeTaskColorPair(
     short pair,
-    const RgbColor& foregroundRgb,
-    const RgbColor& backgroundRgb,
-    short foregroundSlot,
-    short backgroundSlot
+    const RgbColor& foreground,
+    const RgbColor& background
 ) {
-    if (!has_colors() || pair <= 0 || pair >= COLOR_PAIRS) return false;
-    if (foregroundSlot == backgroundSlot) return false;
+    if (!has_colors() || pair <= 0 || pair >= COLOR_PAIRS) {
+        return false;
+    }
 
-    if (!TryInitializeRgbColor(foregroundSlot, foregroundRgb)) return false;
-    if (!TryInitializeRgbColor(backgroundSlot, backgroundRgb)) return false;
+    const short foregroundIndex = NearestTerminalColor(foreground);
+    const short backgroundIndex = NearestTerminalColor(background);
 
-    return init_pair(pair, foregroundSlot, backgroundSlot) != ERR;
-}
-
-bool CustomSlotsForVisibleTask(
-    std::size_t visibleSlot,
-    short& foregroundSlot,
-    short& backgroundSlot
-) {
-    if (COLORS < 16) return false;
-
-    // Allocate from the high end of the palette instead of overwriting low
-    // ANSI slots (8, 9, ...), which some terminals treat specially.
-    const long background = static_cast<long>(COLORS) - 1L - static_cast<long>(visibleSlot) * 2L;
-    const long foreground = background - 1L;
-
-    // Keep the standard 0-15 ANSI palette untouched.
-    if (foreground < 16 || background >= COLORS) return false;
-
-    foregroundSlot = static_cast<short>(foreground);
-    backgroundSlot = static_cast<short>(background);
-    return true;
-}
-
-bool DefaultCustomSlots(short& foregroundSlot, short& backgroundSlot) {
-    if (COLORS < 18) return false;
-    foregroundSlot = static_cast<short>(COLORS - 2);
-    backgroundSlot = static_cast<short>(COLORS - 1);
-    return foregroundSlot >= 16;
+    return init_pair(pair, foregroundIndex, backgroundIndex) != ERR;
 }
 
 } // namespace
@@ -183,36 +205,24 @@ void Application::PeriodicAutosave() {
 
 void Application::ApplyColors() {
     displaySettings_.dirty = false;
+
     if (!has_colors()) {
         persistenceStatus_ = "Terminal does not support colors.";
         return;
     }
 
-    short foreground = NearestBasicColor(displaySettings_.foreground);
-    short background = NearestBasicColor(displaySettings_.background);
-
-    short foregroundSlot = 0;
-    short backgroundSlot = 0;
-    bool customPairInitialized = false;
-
-    if (DefaultCustomSlots(foregroundSlot, backgroundSlot)) {
-        customPairInitialized = TryInitializeRgbPair(
+    if (!InitializeTaskColorPair(
             TaskColorPair,
             displaySettings_.foreground,
-            displaySettings_.background,
-            foregroundSlot,
-            backgroundSlot
-        );
+            displaySettings_.background
+        )) {
+        persistenceStatus_ = "Terminal could not initialize the default task color pair.";
     }
 
-    if (!customPairInitialized) {
-        if (init_pair(TaskColorPair, foreground, background) == ERR) {
-            persistenceStatus_ = "Terminal could not initialize the default task color pair.";
-        }
-    }
-
+    // Pair zero remains the terminal's normal UI style. Only task rows select
+    // TaskColorPair or a per-task pair while they are being rendered.
     bkgd(A_NORMAL);
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
 }
 
 void Application::AddCommandToHistory(const std::string& command) {
@@ -368,7 +378,7 @@ void Application::ResetSuggestionSelection() {
 
 void Application::Render() {
     erase();
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
     const auto suggestions = BuildSuggestions();
     if (!suggestions.empty() && selectedSuggestion_ >= suggestions.size()) selectedSuggestion_ = 0;
     RenderHeader();
@@ -380,7 +390,7 @@ void Application::Render() {
 }
 
 void Application::RenderHeader() {
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
@@ -468,7 +478,7 @@ void Application::RenderTasks() {
     int row = 2;
 
     if (!commandProcessor_.GetInfoLines().empty()) {
-        attrset(A_NORMAL);
+        attr_set(A_NORMAL, 0, nullptr);
         for (const auto& line : commandProcessor_.GetInfoLines()) {
             if (row >= lastTaskRow) break;
             mvaddnstr(row++, 0, line.c_str(), std::max(0, width - 1));
@@ -491,51 +501,38 @@ void Application::RenderTasks() {
              << " - " << task->GetCompletionDateString();
 
         short pair = TaskColorPair;
+
         if (has_colors() && task->HasCustomColor()) {
-            const RgbColor& foregroundRgb = *task->GetForegroundColor();
-            const RgbColor& backgroundRgb = *task->GetBackgroundColor();
-            short foreground = NearestBasicColor(foregroundRgb);
-            short background = NearestBasicColor(backgroundRgb);
             const short candidatePair = static_cast<short>(FirstPerTaskPair + visibleSlot);
 
-            if (candidatePair < COLOR_PAIRS) {
-                short foregroundSlot = 0;
-                short backgroundSlot = 0;
-                bool customPairInitialized = false;
-
-                // visibleSlot + 1 reserves the highest two slots for the
-                // default pair created in ApplyColors().
-                if (CustomSlotsForVisibleTask(visibleSlot + 1, foregroundSlot, backgroundSlot)) {
-                    customPairInitialized = TryInitializeRgbPair(
-                        candidatePair,
-                        foregroundRgb,
-                        backgroundRgb,
-                        foregroundSlot,
-                        backgroundSlot
-                    );
-                }
-
-                if (!customPairInitialized) {
-                    if (init_pair(candidatePair, foreground, background) != ERR) {
-                        pair = candidatePair;
-                    }
-                } else {
-                    pair = candidatePair;
-                }
+            if (candidatePair > 0 && candidatePair < COLOR_PAIRS &&
+                InitializeTaskColorPair(
+                    candidatePair,
+                    *task->GetForegroundColor(),
+                    *task->GetBackgroundColor()
+                )) {
+                pair = candidatePair;
             }
         }
 
-        if (has_colors()) attron(COLOR_PAIR(pair));
+        if (has_colors()) {
+            // Pass the pair explicitly rather than OR-ing COLOR_PAIR into the
+            // attribute mask. This guarantees ncurses receives foreground and
+            // background from the same initialized pair.
+            attr_set(A_NORMAL, pair, nullptr);
+        }
+
         mvaddnstr(row++, 0, line.str().c_str(), std::max(0, width - 1));
-        if (has_colors()) attroff(COLOR_PAIR(pair));
+        attr_set(A_NORMAL, 0, nullptr);
         ++visibleSlot;
     }
-    attrset(A_NORMAL);
+
+    attr_set(A_NORMAL, 0, nullptr);
 }
 
 void Application::RenderSuggestions(const std::vector<Suggestion>& suggestions) {
     if (suggestions.empty()) return;
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
@@ -552,7 +549,7 @@ void Application::RenderSuggestions(const std::vector<Suggestion>& suggestions) 
 }
 
 void Application::RenderStatus() {
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
@@ -574,7 +571,7 @@ void Application::RenderStatus() {
 }
 
 void Application::RenderCommandLine() {
-    attrset(A_NORMAL);
+    attr_set(A_NORMAL, 0, nullptr);
     int height = 0;
     int width = 0;
     getmaxyx(stdscr, height, width);
