@@ -24,6 +24,27 @@ RgbColor ColorFromJson(const json& value, const RgbColor& fallback) {
     };
 }
 
+json FragmentToJson(const SentinelShared::TimeFragment& fragment) {
+    return {
+        {"started_at_epoch", SentinelShared::EpochSeconds(fragment.startedAt)},
+        {"ended_at_epoch", fragment.IsOpen() ? 0 : SentinelShared::EpochSeconds(fragment.endedAt)},
+        {"duration_seconds", fragment.duration.count()}
+    };
+}
+
+SentinelShared::TimeFragment FragmentFromJson(const json& value) {
+    SentinelShared::TimeFragment fragment;
+    const auto started = value.value("started_at_epoch", 0LL);
+    const auto ended = value.value("ended_at_epoch", 0LL);
+    const auto duration = std::max(0LL, value.value("duration_seconds", 0LL));
+    fragment.startedAt = SentinelShared::TimePointFromEpoch(started);
+    fragment.endedAt = ended > 0
+        ? SentinelShared::TimePointFromEpoch(ended)
+        : SentinelShared::TimeFragment::Clock::time_point{};
+    fragment.duration = std::chrono::seconds(duration);
+    return fragment;
+}
+
 } // namespace
 
 TaskDataStore::TaskDataStore(std::filesystem::path path)
@@ -116,6 +137,7 @@ bool TaskDataStore::Load(
                 if (!node) continue;
 
                 node->description = item.value("description", std::string{});
+                const auto createdEpoch = item.value("created_at_epoch", 0LL);
 
                 if (item.contains("color") && item["color"].is_object()) {
                     const auto& color = item["color"];
@@ -130,19 +152,32 @@ bool TaskDataStore::Load(
                 }
 
                 if (kind == NodeKind::Task) {
-                    node->accumulatedTime = std::chrono::seconds(
+                    const auto elapsed = std::chrono::seconds(
                         item.value("elapsed_seconds", 0LL)
                     );
-                    node->completed = item.value("completed", false);
-                    node->running = item.value("running", false) && !node->completed;
-                    if (node->running) node->startedAt = TaskNode::Clock::now();
-
+                    const bool completed = item.value("completed", false);
+                    const bool running = item.value("running", false) && !completed;
                     const auto completedEpoch = item.value("completed_at_epoch", 0LL);
-                    if (node->completed && completedEpoch > 0) {
-                        node->completedAt = std::chrono::system_clock::time_point(
-                            std::chrono::seconds(completedEpoch)
-                        );
+
+                    std::vector<SentinelShared::TimeFragment> fragments;
+                    if (item.contains("time_fragments") && item["time_fragments"].is_array()) {
+                        for (const auto& fragmentJson : item["time_fragments"]) {
+                            if (fragmentJson.is_object()) {
+                                fragments.push_back(FragmentFromJson(fragmentJson));
+                            }
+                        }
                     }
+
+                    node->RestoreTiming(
+                        elapsed,
+                        completed,
+                        running,
+                        SentinelShared::TimePointFromEpoch(createdEpoch),
+                        SentinelShared::TimePointFromEpoch(completedEpoch),
+                        std::move(fragments)
+                    );
+                } else {
+                    node->createdAt = SentinelShared::TimePointFromEpoch(createdEpoch);
                 }
             }
         }
@@ -167,7 +202,7 @@ bool TaskDataStore::Save(
     std::string& errorMessage
 ) const {
     json data;
-    data["version"] = 1;
+    data["version"] = 2;
     data["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
     data["display"] = {
         {"foreground", ColorToJson(displaySettings.foreground)},
@@ -188,7 +223,8 @@ bool TaskDataStore::Save(
             {"name", node.name},
             {"description", node.description},
             {"parent", node.parentId},
-            {"type", node.kind == NodeKind::Folder ? "folder" : "task"}
+            {"type", node.kind == NodeKind::Folder ? "folder" : "task"},
+            {"created_at_epoch", SentinelShared::EpochSeconds(node.createdAt)}
         };
 
         if (node.foregroundColor && node.backgroundColor) {
@@ -200,15 +236,17 @@ bool TaskDataStore::Save(
 
         if (node.kind == NodeKind::Task) {
             const auto completedEpoch = node.completed
-                ? std::chrono::duration_cast<std::chrono::seconds>(
-                    node.completedAt.time_since_epoch()
-                ).count()
+                ? SentinelShared::EpochSeconds(node.completedAt)
                 : 0LL;
 
             item["elapsed_seconds"] = node.Elapsed().count();
             item["running"] = node.running;
             item["completed"] = node.completed;
             item["completed_at_epoch"] = completedEpoch;
+            item["time_fragments"] = json::array();
+            for (const auto& fragment : node.TimeFragments()) {
+                item["time_fragments"].push_back(FragmentToJson(fragment));
+            }
         }
 
         data["nodes"].push_back(std::move(item));
