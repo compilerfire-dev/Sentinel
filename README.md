@@ -8,6 +8,7 @@ Sentinel is a terminal productivity tracker written in C++20 using ncurses.
 - Live elapsed-time updates while a task is running.
 - Interactive fuzzy command palette above the prompt.
 - Ranked fuzzy matching for commands, task IDs, and task names.
+- GUI-style ncurses popup argument windows for commands entered without arguments.
 - Keyboard and mouse selection of fuzzy suggestions.
 - Command history recall with the Up/Down arrow keys.
 - Left/Right command-line cursor editing and mouse cursor placement.
@@ -39,6 +40,41 @@ quit
 ```
 
 `rpg(r,g,b)` is also accepted as an alias for `rgb(r,g,b)`.
+
+## GUI-style argument windows
+
+Commands that require arguments can now be entered by command name alone. Sentinel opens a centered ncurses argument window and builds the same CLI command after you submit it.
+
+Examples:
+
+```text
+add
+remove
+start
+stop
+done
+search
+setJsonFile
+defineColor
+color
+```
+
+`add` contains ID and Name text fields. `remove`, `start`, `stop`, and `done` use a task-ID drop-list. `search` provides a task/query selection. `setJsonFile` provides a JSON-path text field. `defineColor` provides color-name and RGB fields. `color` provides a target drop-list (`default` plus task IDs) and foreground/background color drop-lists populated with built-in and currently defined named colors.
+
+Popup controls:
+
+```text
+Tab          next field/control
+Shift+Tab    previous field/control
+Up/Down      change a drop-list selection
+Left/Right   move inside a text field
+Enter        advance/activate the focused control
+F2           submit the form
+Esc          cancel the form
+Mouse        focus fields and activate Submit/Cancel
+```
+
+Inline CLI syntax remains fully supported, so the popup windows are optional.
 
 ## User-defined task IDs and quoting
 
@@ -244,7 +280,7 @@ On Debian/Ubuntu/Linux Mint:
 sudo apt install libncurses-dev cmake g++
 cmake -S . -B build
 cmake --build build
-./build/Sentinel
+./build/bin/Sentinel
 ```
 
 The repository contains `include/nlohmann/json.hpp`, so an additional JSON package is not required.
