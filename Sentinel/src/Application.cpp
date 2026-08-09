@@ -115,7 +115,16 @@ Application::Application()
 
 int Application::Run() {
     initscr(); cbreak(); noecho(); keypad(stdscr,TRUE); curs_set(1); timeout(100); mousemask(ALL_MOUSE_EVENTS,nullptr);
-    if (has_colors()) start_color(); ApplyColors();
+    if (has_colors()) start_color();
+    ApplyColors();
+
+    // Force ncurses to physically repaint the complete terminal once at startup.
+    // Without this, some terminals keep cells from the previous screen until a
+    // resize event causes ncurses to invalidate and redraw the whole window.
+    clearok(stdscr, TRUE);
+    clear();
+    refresh();
+
     while (!commandProcessor_.ShouldQuit()) { HandleInput(); PeriodicAutosave(); if(displaySettings_.dirty)ApplyColors(); Render(); }
     std::string error; taskManager_.Save(error); endwin(); return 0;
 }
