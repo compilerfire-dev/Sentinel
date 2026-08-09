@@ -88,11 +88,31 @@ std::optional<std::size_t> TaskManager::FindBestMatch(const std::string& query) 
     return results.empty() ? std::nullopt : std::optional<std::size_t>{results.front().index};
 }
 
+void TaskManager::DefineColor(std::string id, const RgbColor& color) {
+    definedColors_[std::move(id)] = color;
+}
+
+std::optional<RgbColor> TaskManager::GetDefinedColor(const std::string& id) const {
+    const auto iterator = definedColors_.find(id);
+    if (iterator == definedColors_.end()) return std::nullopt;
+    return iterator->second;
+}
+
+const std::unordered_map<std::string, RgbColor>& TaskManager::GetDefinedColors() const noexcept {
+    return definedColors_;
+}
+
 bool TaskManager::Save(std::string& errorMessage) const {
     try {
         json root;
-        root["version"] = 2;
+        root["version"] = 3;
+        root["defined_colors"] = json::object();
         root["tasks"] = json::array();
+
+        for (const auto& [id, color] : definedColors_) {
+            root["defined_colors"][id] = ColorToJson(color);
+        }
+
         for (const Task& task : tasks_) {
             const auto completedEpoch = std::chrono::duration_cast<std::chrono::seconds>(task.GetCompletionTime().time_since_epoch()).count();
             json item = {
@@ -133,6 +153,7 @@ bool TaskManager::Load(std::string& errorMessage) {
         const std::filesystem::path path(jsonFilePath_);
         if (!std::filesystem::exists(path)) {
             tasks_.clear();
+            definedColors_.clear();
             return Save(errorMessage);
         }
         std::ifstream input(path);
@@ -148,6 +169,14 @@ bool TaskManager::Load(std::string& errorMessage) {
         }
 
         std::vector<Task> loaded;
+        std::unordered_map<std::string, RgbColor> loadedColors;
+
+        if (root.contains("defined_colors") && root["defined_colors"].is_object()) {
+            for (auto iterator = root["defined_colors"].begin(); iterator != root["defined_colors"].end(); ++iterator) {
+                loadedColors[iterator.key()] = ColorFromJson(iterator.value());
+            }
+        }
+
         std::size_t legacyIndex = 0;
         for (const auto& item : root["tasks"]) {
             const std::string id = item.value("id", std::to_string(legacyIndex++));
@@ -168,6 +197,7 @@ bool TaskManager::Load(std::string& errorMessage) {
             loaded.push_back(std::move(task));
         }
         tasks_ = std::move(loaded);
+        definedColors_ = std::move(loadedColors);
         errorMessage.clear();
         return true;
     } catch (const std::exception& exception) {
@@ -188,10 +218,12 @@ bool TaskManager::SetJsonFile(const std::string& path, std::string& errorMessage
     }
     const std::string previousPath = jsonFilePath_;
     const std::vector<Task> previousTasks = tasks_;
+    const auto previousColors = definedColors_;
     jsonFilePath_ = path;
     if (Load(errorMessage)) return true;
     jsonFilePath_ = previousPath;
     tasks_ = previousTasks;
+    definedColors_ = previousColors;
     return false;
 }
 
