@@ -11,3 +11,4 @@ find_package(Curses REQUIRED)
 
 add_subdirectory(Sentinel)
 add_subdirectory(SentinelTasks)
+add_subdirectory(SentinelStats)
