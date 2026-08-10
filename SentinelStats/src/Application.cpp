@@ -18,15 +18,29 @@ struct PlotBounds {
     double bottom{54.0};
 };
 
+enum TaskTableColumn {
+    TaskIdColumn,
+    TaskNameColumn,
+    TaskTrackedColumn,
+    TaskFragmentsColumn,
+    TaskStateColumn,
+    TaskCreatedColumn,
+    TaskCompletedColumn,
+    TaskColumnCount
+};
+
 std::string FormatDuration(std::uint64_t seconds) {
     const auto hours = seconds / 3600;
     const auto minutes = (seconds % 3600) / 60;
+    const auto remaining = seconds % 60;
     std::ostringstream stream;
     stream << hours << "h " << minutes << "m";
+    if (hours == 0) stream << ' ' << remaining << "s";
     return stream.str();
 }
 
 std::string FormatDate(std::int64_t epoch) {
+    if (epoch <= 0) return "-";
     const std::time_t value = static_cast<std::time_t>(epoch);
     std::tm local{};
 #ifdef _WIN32
@@ -40,6 +54,7 @@ std::string FormatDate(std::int64_t epoch) {
 }
 
 std::string FormatDateTime(std::int64_t epoch) {
+    if (epoch <= 0) return "-";
     const std::time_t value = static_cast<std::time_t>(epoch);
     std::tm local{};
 #ifdef _WIN32
@@ -172,6 +187,103 @@ void DrawLineSeries(
     }
 }
 
+void DrawPeriodBars(
+    GtkWidget* widget,
+    cairo_t* cr,
+    const std::vector<PeriodWork>& periods,
+    const std::string& title,
+    std::size_t maximumBars
+) {
+    GtkAllocation allocation{};
+    gtk_widget_get_allocation(widget, &allocation);
+
+    SetSourceHex(cr, 1.0, 1.0, 1.0);
+    cairo_paint(cr);
+    SetSourceHex(cr, 0.12, 0.12, 0.12);
+    DrawText(cr, 18, 24, title, 16.0);
+
+    if (periods.empty()) {
+        DrawEmptyMessage(
+            cr,
+            allocation.width,
+            allocation.height,
+            "No measured time fragments are available for this view."
+        );
+        return;
+    }
+
+    const std::size_t first = periods.size() > maximumBars
+        ? periods.size() - maximumBars
+        : 0;
+    const std::size_t count = periods.size() - first;
+
+    constexpr double left = 72.0;
+    constexpr double right = 28.0;
+    constexpr double top = 52.0;
+    constexpr double bottom = 72.0;
+    const double plotWidth = std::max(1.0, allocation.width - left - right);
+    const double plotHeight = std::max(1.0, allocation.height - top - bottom);
+
+    double maxHours = 0.0;
+    for (std::size_t i = first; i < periods.size(); ++i) {
+        maxHours = std::max(
+            maxHours,
+            static_cast<double>(periods[i].trackedSeconds) / 3600.0
+        );
+    }
+    maxHours = std::max(1.0, maxHours);
+
+    SetSourceHex(cr, 0.35, 0.35, 0.35);
+    cairo_move_to(cr, left, top);
+    cairo_line_to(cr, left, top + plotHeight);
+    cairo_line_to(cr, left + plotWidth, top + plotHeight);
+    cairo_stroke(cr);
+
+    for (int line = 0; line <= 5; ++line) {
+        const double ratio = static_cast<double>(line) / 5.0;
+        const double y = top + plotHeight - ratio * plotHeight;
+        SetSourceHex(cr, 0.90, 0.90, 0.90);
+        cairo_move_to(cr, left, y);
+        cairo_line_to(cr, left + plotWidth, y);
+        cairo_stroke(cr);
+
+        SetSourceHex(cr, 0.25, 0.25, 0.25);
+        std::ostringstream label;
+        label << std::fixed << std::setprecision(1) << ratio * maxHours << "h";
+        DrawText(cr, 12, y + 4, label.str(), 10.0);
+    }
+
+    const double slot = plotWidth / std::max<std::size_t>(1, count);
+    const double barWidth = std::max(3.0, slot * 0.66);
+    const std::size_t labelStep = std::max<std::size_t>(1, (count + 7) / 8);
+
+    for (std::size_t local = 0; local < count; ++local) {
+        const auto& period = periods[first + local];
+        const double hours = static_cast<double>(period.trackedSeconds) / 3600.0;
+        const double barHeight = hours / maxHours * plotHeight;
+        const double x = left + local * slot + (slot - barWidth) / 2.0;
+        const double y = top + plotHeight - barHeight;
+
+        SetSourceHex(cr, 0.18, 0.49, 0.79);
+        cairo_rectangle(cr, x, y, barWidth, barHeight);
+        cairo_fill(cr);
+
+        if (local % labelStep == 0 || local + 1 == count) {
+            SetSourceHex(cr, 0.25, 0.25, 0.25);
+            DrawText(
+                cr,
+                x,
+                top + plotHeight + 20,
+                FormatDate(period.periodStartEpoch),
+                9.0
+            );
+        }
+    }
+
+    SetSourceHex(cr, 0.25, 0.25, 0.25);
+    DrawText(cr, 12, 42, "Tracked hours", 10.0);
+}
+
 const std::array<std::array<double, 3>, 8> SeriesColors{{
     {{0.18, 0.49, 0.79}},
     {{0.86, 0.33, 0.25}},
@@ -198,6 +310,20 @@ GtkWidget* CreateMetric(const char* title, GtkWidget** valueLabel) {
     gtk_box_pack_start(GTK_BOX(box), titleLabel, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), *valueLabel, FALSE, FALSE, 0);
     return box;
+}
+
+void AppendTaskColumn(GtkTreeView* view, const char* title, int modelColumn) {
+    GtkCellRenderer* renderer = gtk_cell_renderer_text_new();
+    GtkTreeViewColumn* column = gtk_tree_view_column_new_with_attributes(
+        title,
+        renderer,
+        "text",
+        modelColumn,
+        nullptr
+    );
+    gtk_tree_view_column_set_resizable(column, TRUE);
+    gtk_tree_view_column_set_sort_column_id(column, modelColumn);
+    gtk_tree_view_append_column(view, column);
 }
 
 } // namespace
@@ -235,6 +361,16 @@ void Application::OnReloadClicked(GtkButton*, gpointer userData) {
 
 gboolean Application::OnTasksDraw(GtkWidget* widget, cairo_t* cr, gpointer userData) {
     static_cast<Application*>(userData)->DrawTaskProgression(widget, cr);
+    return FALSE;
+}
+
+gboolean Application::OnDailyDraw(GtkWidget* widget, cairo_t* cr, gpointer userData) {
+    static_cast<Application*>(userData)->DrawDailyWork(widget, cr);
+    return FALSE;
+}
+
+gboolean Application::OnWeeklyDraw(GtkWidget* widget, cairo_t* cr, gpointer userData) {
+    static_cast<Application*>(userData)->DrawWeeklyWork(widget, cr);
     return FALSE;
 }
 
@@ -292,6 +428,58 @@ void Application::BuildWindow(GtkApplication* app) {
         gtk_label_new("Task progression")
     );
     g_signal_connect(tasksDrawingArea_, "draw", G_CALLBACK(OnTasksDraw), this);
+
+    dailyDrawingArea_ = gtk_drawing_area_new();
+    gtk_widget_set_size_request(dailyDrawingArea_, -1, 520);
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        dailyDrawingArea_,
+        gtk_label_new("Daily")
+    );
+    g_signal_connect(dailyDrawingArea_, "draw", G_CALLBACK(OnDailyDraw), this);
+
+    weeklyDrawingArea_ = gtk_drawing_area_new();
+    gtk_widget_set_size_request(weeklyDrawingArea_, -1, 520);
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        weeklyDrawingArea_,
+        gtk_label_new("Weekly")
+    );
+    g_signal_connect(weeklyDrawingArea_, "draw", G_CALLBACK(OnWeeklyDraw), this);
+
+    taskStore_ = gtk_list_store_new(
+        TaskColumnCount,
+        G_TYPE_STRING,
+        G_TYPE_STRING,
+        G_TYPE_STRING,
+        G_TYPE_STRING,
+        G_TYPE_STRING,
+        G_TYPE_STRING,
+        G_TYPE_STRING
+    );
+    taskView_ = gtk_tree_view_new_with_model(GTK_TREE_MODEL(taskStore_));
+    gtk_tree_view_set_headers_clickable(GTK_TREE_VIEW(taskView_), TRUE);
+    gtk_tree_view_set_grid_lines(GTK_TREE_VIEW(taskView_), GTK_TREE_VIEW_GRID_LINES_HORIZONTAL);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "ID", TaskIdColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "Task", TaskNameColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "Tracked", TaskTrackedColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "Fragments", TaskFragmentsColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "State", TaskStateColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "Created", TaskCreatedColumn);
+    AppendTaskColumn(GTK_TREE_VIEW(taskView_), "Completed", TaskCompletedColumn);
+
+    GtkWidget* taskScroll = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(
+        GTK_SCROLLED_WINDOW(taskScroll),
+        GTK_POLICY_AUTOMATIC,
+        GTK_POLICY_AUTOMATIC
+    );
+    gtk_container_add(GTK_CONTAINER(taskScroll), taskView_);
+    gtk_notebook_append_page(
+        GTK_NOTEBOOK(notebook),
+        taskScroll,
+        gtk_label_new("Tasks")
+    );
 
     GtkWidget* fragmentScroll = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(
@@ -368,6 +556,7 @@ bool Application::LoadPath(const std::filesystem::path& path) {
     }
 
     RefreshLabels();
+    RefreshTaskTable();
     QueueCharts();
     return true;
 }
@@ -386,15 +575,50 @@ void Application::RefreshLabels() {
 
     std::ostringstream status;
     status << "Loaded " << snapshot.totalTasks << " tasks; "
-           << snapshot.createdTaskHistory.size() << " timestamped creations; "
-           << snapshot.completedTaskHistory.size() << " timestamped completions; "
+           << snapshot.dailyWork.size() << " active days; "
+           << snapshot.weeklyWork.size() << " active weeks; "
            << snapshot.totalFragments << " measured fragments; "
            << snapshot.projects.size() << " project series.";
     gtk_label_set_text(GTK_LABEL(statusLabel_), status.str().c_str());
 }
 
+void Application::RefreshTaskTable() {
+    if (!taskStore_) return;
+    gtk_list_store_clear(taskStore_);
+
+    for (const auto& task : data_.Snapshot().taskAnalytics) {
+        GtkTreeIter iterator{};
+        gtk_list_store_append(taskStore_, &iterator);
+
+        const std::string tracked = FormatDuration(task.trackedSeconds);
+        const std::string fragments = std::to_string(task.fragmentCount);
+        const std::string state = task.completed
+            ? "completed"
+            : task.running ? "running" : "idle";
+        const std::string created = FormatDateTime(task.createdAtEpoch);
+        const std::string completed = task.completed
+            ? FormatDateTime(task.completedAtEpoch)
+            : "-";
+
+        gtk_list_store_set(
+            taskStore_,
+            &iterator,
+            TaskIdColumn, task.id.c_str(),
+            TaskNameColumn, task.name.c_str(),
+            TaskTrackedColumn, tracked.c_str(),
+            TaskFragmentsColumn, fragments.c_str(),
+            TaskStateColumn, state.c_str(),
+            TaskCreatedColumn, created.c_str(),
+            TaskCompletedColumn, completed.c_str(),
+            -1
+        );
+    }
+}
+
 void Application::QueueCharts() {
     if (tasksDrawingArea_) gtk_widget_queue_draw(tasksDrawingArea_);
+    if (dailyDrawingArea_) gtk_widget_queue_draw(dailyDrawingArea_);
+    if (weeklyDrawingArea_) gtk_widget_queue_draw(weeklyDrawingArea_);
     if (fragmentsDrawingArea_) {
         const int desiredHeight = std::max(
             520,
@@ -481,6 +705,26 @@ void Application::DrawTaskProgression(GtkWidget* widget, cairo_t* cr) const {
     cairo_fill(cr);
     SetSourceHex(cr, 0.15, 0.15, 0.15);
     DrawText(cr, 136, 44, "Completed", 11.0);
+}
+
+void Application::DrawDailyWork(GtkWidget* widget, cairo_t* cr) const {
+    DrawPeriodBars(
+        widget,
+        cr,
+        data_.Snapshot().dailyWork,
+        "Tracked work by day (latest 31 active days)",
+        31
+    );
+}
+
+void Application::DrawWeeklyWork(GtkWidget* widget, cairo_t* cr) const {
+    DrawPeriodBars(
+        widget,
+        cr,
+        data_.Snapshot().weeklyWork,
+        "Tracked work by week, Monday start (latest 26 active weeks)",
+        26
+    );
 }
 
 void Application::DrawTaskFragments(GtkWidget* widget, cairo_t* cr) const {
