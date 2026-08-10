@@ -18,6 +18,9 @@ public:
     bool HasPath() const noexcept;
     bool Modified() const noexcept;
 
+    std::string Text() const;
+    void SetText(const std::string& text, bool markModified = true);
+
     std::size_t LineCount() const noexcept;
     const std::string& Line(std::size_t row) const;
     std::string& Line(std::size_t row);
