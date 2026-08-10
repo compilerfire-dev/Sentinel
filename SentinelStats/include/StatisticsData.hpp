@@ -31,6 +31,23 @@ struct TaskFragmentSeries {
     std::vector<TaskFragment> fragments;
 };
 
+struct PeriodWork {
+    std::int64_t periodStartEpoch{0};
+    std::uint64_t trackedSeconds{0};
+    std::size_t fragmentSlices{0};
+};
+
+struct TaskAnalytics {
+    std::string id;
+    std::string name;
+    std::int64_t createdAtEpoch{0};
+    std::int64_t completedAtEpoch{0};
+    std::uint64_t trackedSeconds{0};
+    std::size_t fragmentCount{0};
+    bool running{false};
+    bool completed{false};
+};
+
 struct StatisticsSnapshot {
     std::size_t totalTasks{0};
     std::size_t completedTasks{0};
@@ -40,6 +57,9 @@ struct StatisticsSnapshot {
     std::vector<TimePointValue> createdTaskHistory;
     std::vector<TimePointValue> completedTaskHistory;
     std::vector<TaskFragmentSeries> taskFragments;
+    std::vector<PeriodWork> dailyWork;
+    std::vector<PeriodWork> weeklyWork;
+    std::vector<TaskAnalytics> taskAnalytics;
     std::vector<ProjectSeries> projects;
 };
 
