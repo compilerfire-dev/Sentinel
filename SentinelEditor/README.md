@@ -1,6 +1,6 @@
 # SentinelEditor
 
-SentinelEditor is a Vim-inspired graphical text editor written in C++20 with GTK+ 3. The document is edited in a native multiline `GtkTextView` inside a scrollable GTK window; it is not a terminal emulator and no ncurses rendering is used by SentinelEditor anymore.
+SentinelEditor is a GTK+ 3 graphical text editor written in C++20. Its document is a native multiline `GtkTextView` with a synchronized line-number gutter, Vim-inspired modal controls, programming-speed metrics, native menus, and a fuzzy command palette.
 
 ## Run
 
@@ -10,38 +10,123 @@ SentinelEditor is a Vim-inspired graphical text editor written in C++20 with GTK
 ./build/bin/SentinelEditor src/main.cpp
 ```
 
-Opening a path that does not exist creates an empty named buffer. The file is created only when it is written.
-
-## GTK layout
-
-The main window contains:
+## Main window
 
 ```text
-New | Open | Save | Save As                         SentinelEditor
-------------------------------------------------------------------
+File   Settings   Help
+-------------------------------------------------------------------
   1 | #include <iostream>
   2 |
   3 | int main()
   4 | {
   5 |     return 0;
   6 | }
-    |
-    |                 native GtkTextView document
-    |
-------------------------------------------------------------------
-NORMAL  main.cpp [+]  5:8               LPM 3  LPH 47  CPM30 186
-: command/search entry (shown only when needed)
+-------------------------------------------------------------------
+NORMAL  main.cpp [+]                     LPM 3  LPH 47  CPM30 186
 ```
 
-The large central `GtkTextView` is the actual editor. GTK owns text layout, scrolling, mouse positioning, selection, clipboard behavior and UTF-8 text representation.
+The editor field is a native `GtkTextView`, not a terminal emulator. GTK provides scrolling, mouse placement, selection, clipboard behavior, and Unicode text representation.
 
-A dedicated GTK line-number gutter is rendered to the left of the text view. It tracks the text view's vertical scroll position and uses GTK's text-line geometry, so line numbers remain aligned with the corresponding logical lines. The current cursor line is highlighted in the gutter.
+## Command Palette
 
-The gutter width grows automatically as the document passes line-count digit boundaries such as 99 -> 100 or 999 -> 1000.
+Press:
 
-## Modes
+```text
+Ctrl+Shift+P
+```
 
-SentinelEditor preserves four Vim-inspired modes:
+or choose:
+
+```text
+Settings -> Command Palette...
+```
+
+The palette behaves similarly to modern editor command palettes: typing a partial/subsequence query immediately fuzzy-ranks commands. For example:
+
+```text
+save
+stng
+line num
+vim
+```
+
+can match actions such as `File: Save`, `Settings: Open Settings`, `View: Toggle Line Numbers`, and `Editor: Toggle Vim Mode`.
+
+Use Up/Down to change the selected command, Enter to execute, and Escape to close the palette. The palette searches both command names and descriptions.
+
+Currently registered palette actions include:
+
+```text
+File: New
+File: Open
+File: Save
+File: Save As
+File: Quit
+Editor: Find
+Settings: Open Settings
+View: Toggle Line Numbers
+View: Toggle Typing Metrics
+Editor: Toggle Vim Mode
+Help: Keyboard Shortcuts
+Help: About SentinelEditor
+```
+
+The fuzzy-ranking algorithm is isolated in `FuzzySearch`, so it can be tested without GTK.
+
+## Menu bar
+
+### File
+
+```text
+New
+Open...
+Save
+Save As...
+Quit
+```
+
+These actions use the same underlying editor operations as the command palette and Ex-style commands. Open and Save As use GTK file chooser dialogs. Unsaved work is protected before destructive close/open operations.
+
+### Settings
+
+```text
+Command Palette...    Ctrl+Shift+P
+Settings...
+--------------------
+Toggle Line Numbers
+Toggle Typing Metrics
+Toggle Vim Mode
+```
+
+### Help
+
+```text
+Keyboard Shortcuts
+About SentinelEditor
+```
+
+## Settings dialog
+
+Choose:
+
+```text
+Settings -> Settings...
+```
+
+or run `Settings: Open Settings` through the command palette.
+
+The separate settings popup currently supports:
+
+- editor font size (8-32 pt);
+- show/hide line-number gutter;
+- show/hide LPM / LPH / CPM30 typing metrics;
+- enable/disable Vim-style modal editing.
+
+`Apply` applies changes without closing the dialog. `OK` applies and closes. When Vim mode is disabled, the central `GtkTextView` behaves as a conventional directly editable GTK text field.
+
+## Vim-inspired modes
+
+When Vim mode is enabled:
 
 ```text
 NORMAL
@@ -50,86 +135,24 @@ COMMAND
 SEARCH
 ```
 
-In `NORMAL` mode the main `GtkTextView` is non-editable and key presses are interpreted as Vim-like commands. In `INSERT` mode the exact same `GtkTextView` becomes directly editable, so normal GTK text-input behavior is available. `Esc` returns to Normal mode.
-
-## Normal mode
-
-Movement:
+Normal-mode controls include:
 
 ```text
-h / Left        move left
-j / Down        move down
-k / Up          move up
-l / Right       move right
-w               next word
-b               previous word
-0 / Home        beginning of line
-$ / End         end of line
-gg              first position in document
-G               end of document
-Ctrl-B / PgUp   move upward by a page-sized step
-Ctrl-F / PgDn   move downward by a page-sized step
+h j k l / arrows    move
+w / b                next / previous word
+0 / $                line start / end
+gg / G               document start / end
+i / a / I / A        enter Insert mode
+o / O                create line and insert
+x                     delete character
+dd                    delete current line
+/                     search
+:                     Ex-style command entry
 ```
 
-Editing:
+`Esc` returns from Insert to Normal mode.
 
-```text
-i       enter Insert mode at cursor
-a       enter Insert mode after cursor
-I       insert at beginning of line
-A       insert at end of line
-o       create line below and insert
-O       create line above and insert
-x       delete character
-dd      delete current line
-```
-
-Search and commands:
-
-```text
-/       open the GTK search entry
-n       repeat previous search
-:       open the GTK Ex-style command entry
-```
-
-`Ctrl-S` saves from Normal or Insert mode.
-
-## Insert mode
-
-Insert mode uses GTK's native text editing. Ordinary text entry, Unicode text, mouse placement, selection, clipboard shortcuts, scrolling, Enter, Backspace, Delete, Home/End and arrow keys are handled by the `GtkTextView`.
-
-The editor records direct keyboard character/new-line events for its programming-speed metrics. Clipboard pastes are intentionally not treated as typing speed.
-
-## Programming speed metrics
-
-The bottom-right status area continuously shows:
-
-```text
-LPM 3   LPH 47   CPM30 186
-```
-
-- `LPM` — new-line creation events during the most recent 60 seconds.
-- `LPH` — new-line creation events during the most recent 60 minutes.
-- `CPM30` — direct character key presses during the most recent 30 seconds, normalized to characters per minute.
-
-A line event is recorded for Enter in Insert mode and for Vim-style `o` / `O`. The rolling display refreshes every 200 ms, so values fall naturally when events leave their time windows.
-
-## Native file controls
-
-The toolbar provides:
-
-```text
-New
-Open
-Save
-Save As
-```
-
-`Open` and `Save As` use native GTK file chooser dialogs. Closing the window or opening another file while the document is modified presents a GTK Save / Discard / Cancel warning.
-
-## Command mode
-
-Press `:` to reveal the command entry. Supported commands are:
+## Ex-style commands
 
 ```text
 :w
@@ -137,40 +160,31 @@ Press `:` to reveal the command entry. Supported commands are:
 :q
 :q!
 :wq
-:wq <path>
 :x
 :e <path>
 :e! <path>
 :new
 :new!
+:settings
+:palette
 :help
 ```
 
-`:q` and `:e` protect unsaved modifications. Their `!` forms deliberately discard them.
-
-Paths containing spaces can be quoted:
-
-```text
-:w "notes/my file.txt"
-:e "src/example file.cpp"
-```
-
-## Search
-
-Press `/` to reveal the GTK search entry, type a literal string, and press Enter. The matching range is selected in the main text field and scrolled into view. `n` searches for the next occurrence and wraps to the beginning.
-
 ## Line-number gutter
 
-`LineNumberGutter` is intentionally separate from the editor controller. It owns a GTK drawing area and listens to:
+The gutter is a separate GTK drawing component beside the `GtkTextView`. It follows vertical scrolling, highlights the cursor line, redraws after edits/cursor moves, and automatically widens as line-number digit counts increase.
+
+## Programming-speed metrics
+
+The bottom-right status area shows:
 
 ```text
-GtkAdjustment::value-changed   vertical scrolling
-GtkTextBuffer::changed         inserted/deleted lines and gutter width
-GtkTextBuffer::mark-set        cursor/current-line changes
-GtkWidget::size-allocate       text-view geometry changes
+LPM 3   LPH 47   CPM30 186
 ```
 
-For each repaint it obtains the text view's visible buffer rectangle and the y-range for each visible logical line, then renders the corresponding 1-based line number. The line number of the insertion cursor is drawn at full emphasis with a subtle highlighted row behind it.
+- `LPM`: new-line creation events in the latest 60 seconds.
+- `LPH`: new-line creation events in the latest 60 minutes.
+- `CPM30`: direct character input during the latest 30 seconds, normalized to characters/minute.
 
 ## Source layout
 
@@ -181,46 +195,37 @@ SentinelEditor/
 ├── include/
 │   ├── Application.hpp
 │   ├── EditorBuffer.hpp
+│   ├── FuzzySearch.hpp
 │   ├── LineNumberGutter.hpp
 │   └── TypingMetrics.hpp
 ├── src/
 │   ├── Application.cpp
 │   ├── EditorBuffer.cpp
+│   ├── FuzzySearch.cpp
 │   ├── LineNumberGutter.cpp
 │   └── TypingMetrics.cpp
 └── tests/
     ├── EditorBufferTest.cpp
+    ├── FuzzySearchTest.cpp
     └── TypingMetricsTest.cpp
 ```
 
-`Application` owns the GTK window, `GtkTextView`, Vim-inspired mode controller, native dialogs, search/command entries, status bar and key dispatch. `LineNumberGutter` owns the scroll-synchronized GTK line-number view. `EditorBuffer` remains the file-storage model and can synchronize complete GTK text through `Text()` / `SetText()`. `TypingMetrics` owns the rolling activity windows.
-
-## Build
-
-SentinelEditor links GTK3 rather than ncurses. From the repository root:
+## Build and test
 
 ```bash
 sudo apt install build-essential cmake pkg-config libgtk-3-dev libncurses-dev
 cmake -S . -B build -DBUILD_TESTING=ON
 cmake --build build
-./build/bin/SentinelEditor
 ctest --test-dir build --output-on-failure
+./build/bin/SentinelEditor
 ```
 
-The CTest suite includes `SentinelEditor.Buffer` and `SentinelEditor.TypingMetrics`. The workspace still needs ncurses because Sentinel and SentinelTasks remain terminal applications.
-
-## Natural next features
-
-Useful next editor-specific additions include:
+CTest includes:
 
 ```text
-syntax highlighting
-undo / redo history
-visual mode
-yank / paste registers
-multiple tabs / buffers
-split editor panes
-regex search and replace
-project/file sidebar
-configurable fonts and tab width
+SentinelEditor.Buffer
+SentinelEditor.FuzzySearch
+SentinelEditor.TypingMetrics
 ```
+
+The workspace still requires ncurses because Sentinel and SentinelTasks remain terminal applications.
