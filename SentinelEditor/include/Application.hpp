@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorBuffer.hpp"
+#include "TypingMetrics.hpp"
 
 #include <cstddef>
 #include <string>
@@ -58,6 +59,7 @@ private:
     static std::string ExpandTabs(const std::string& value, std::size_t tabWidth = 4);
 
     EditorBuffer buffer_;
+    TypingMetrics typingMetrics_;
     Mode mode_{Mode::Normal};
 
     std::size_t cursorRow_{0};
