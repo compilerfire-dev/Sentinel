@@ -76,6 +76,7 @@ public:
     bool MoveNode(const std::string& id, std::string parentId, std::string& errorMessage);
     bool SetCollapsed(const std::string& id, bool collapsed, std::string& errorMessage);
     bool ToggleCollapsed(const std::string& id, std::string& errorMessage);
+    bool ExpandAncestors(const std::string& id, std::string& errorMessage);
     bool SetDescription(const std::string& id, std::string description, std::string& errorMessage);
     bool SetColor(const std::string& id, RgbColor foreground, RgbColor background, std::string& errorMessage);
     void ClearColor(const std::string& id);
@@ -88,10 +89,10 @@ public:
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
 
-    // Flatten() is the visible UI projection and respects collapsed folders.
-    // FlattenAll() always includes every descendant and is used for persistence.
+    // Full traversal is stable for persistence, dialogs and statistics.
     std::vector<VisibleTreeNode> Flatten() const;
-    std::vector<VisibleTreeNode> FlattenAll() const;
+    // UI traversal omits descendants of collapsed folders.
+    std::vector<VisibleTreeNode> FlattenVisible() const;
     std::optional<std::string> ParentOf(const std::string& id) const;
     std::optional<std::string> FirstChildOf(const std::string& id) const;
     bool Empty() const noexcept;
