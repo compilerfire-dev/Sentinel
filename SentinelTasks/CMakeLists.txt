@@ -22,3 +22,20 @@ target_compile_options(SentinelTasks PRIVATE
     -Wextra
     -Wpedantic
 )
+
+if(BUILD_TESTING)
+    add_executable(SentinelTasksTreeTest
+        tests/TaskTreeTest.cpp
+        src/TaskTree.cpp
+    )
+    target_include_directories(SentinelTasksTreeTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(SentinelTasksTreeTest PRIVATE SentinelShared)
+    target_compile_options(SentinelTasksTreeTest PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    add_test(NAME SentinelTasks.TreeModel COMMAND SentinelTasksTreeTest)
+endif()
