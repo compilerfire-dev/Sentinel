@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorBuffer.hpp"
+#include "LineNumberGutter.hpp"
 #include "TypingMetrics.hpp"
 
 #include <gtk/gtk.h>
@@ -88,6 +89,7 @@ private:
 
     EditorBuffer editorBuffer_;
     TypingMetrics typingMetrics_;
+    LineNumberGutter lineNumberGutter_;
 
     Mode mode_{Mode::Normal};
     bool pendingDelete_{false};
