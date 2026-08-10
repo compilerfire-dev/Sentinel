@@ -2,400 +2,409 @@
 
 #include <algorithm>
 #include <cctype>
-#include <clocale>
-#include <ncurses.h>
+#include <gdk/gdkkeysyms.h>
 #include <sstream>
+#include <utility>
 
 namespace {
 
-constexpr std::size_t MouseWheelStep = 3;
+constexpr guint RefreshIntervalMilliseconds = 200;
 
-bool IsWheelUp(mmask_t state) {
-#ifdef BUTTON4_PRESSED
-    if ((state & BUTTON4_PRESSED) != 0) return true;
-#endif
-#ifdef BUTTON4_CLICKED
-    if ((state & BUTTON4_CLICKED) != 0) return true;
-#endif
-    return false;
-}
-
-bool IsWheelDown(mmask_t state) {
-#ifdef BUTTON5_PRESSED
-    if ((state & BUTTON5_PRESSED) != 0) return true;
-#endif
-#ifdef BUTTON5_CLICKED
-    if ((state & BUTTON5_CLICKED) != 0) return true;
-#endif
-    return false;
-}
-
-bool IsWordCharacter(char value) {
-    const unsigned char c = static_cast<unsigned char>(value);
-    return std::isalnum(c) != 0 || value == '_';
+bool HasEditingModifier(GdkModifierType state) {
+    return (state & (GDK_CONTROL_MASK | GDK_MOD1_MASK | GDK_SUPER_MASK)) != 0;
 }
 
 } // namespace
 
 int Application::Run(int argc, char** argv) {
-    std::setlocale(LC_ALL, "");
+    if (argc > 1 && argv[1] && *argv[1]) initialPath_ = argv[1];
 
-    if (argc > 1 && argv[1] && *argv[1]) {
-        std::string error;
-        if (!buffer_.Load(argv[1], error)) status_ = error;
-        else status_ = "Opened " + buffer_.Path().string();
+    app_ = gtk_application_new(
+        "dev.compilerfire.sentinel.editor",
+        G_APPLICATION_FLAGS_NONE
+    );
+    g_signal_connect(app_, "activate", G_CALLBACK(OnActivate), this);
+
+    char* gtkArgv[] = {
+        (argc > 0 && argv && argv[0]) ? argv[0] : const_cast<char*>("SentinelEditor"),
+        nullptr
+    };
+    const int result = g_application_run(G_APPLICATION(app_), 1, gtkArgv);
+
+    if (refreshTimerId_ != 0) {
+        g_source_remove(refreshTimerId_);
+        refreshTimerId_ = 0;
     }
-
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    mousemask(ALL_MOUSE_EVENTS, nullptr);
-    timeout(200);
-    curs_set(1);
-
-    while (running_) {
-        Render();
-        HandleInput(getch());
-    }
-
-    endwin();
-    return 0;
+    g_object_unref(app_);
+    app_ = nullptr;
+    return result;
 }
 
-void Application::HandleInput(int key) {
-    if (key == ERR) return;
-
-    if (key == KEY_MOUSE) {
-        HandleMouse();
-        return;
-    }
-
-    switch (mode_) {
-        case Mode::Normal: HandleNormalInput(key); break;
-        case Mode::Insert: HandleInsertInput(key); break;
-        case Mode::Command: HandleCommandInput(key); break;
-        case Mode::Search: HandleSearchInput(key); break;
-    }
-
-    ClampCursor();
-    EnsureCursorVisible();
+void Application::OnActivate(GtkApplication* app, gpointer userData) {
+    static_cast<Application*>(userData)->BuildWindow(app);
 }
 
-void Application::HandleNormalInput(int key) {
+gboolean Application::OnTextKeyPress(GtkWidget*, GdkEventKey* event, gpointer userData) {
+    return static_cast<Application*>(userData)->HandleTextKeyPress(event);
+}
+
+gboolean Application::OnCommandEntryKeyPress(GtkWidget*, GdkEventKey* event, gpointer userData) {
+    return static_cast<Application*>(userData)->HandleCommandEntryKey(event);
+}
+
+void Application::OnBufferChanged(GtkTextBuffer* buffer, gpointer userData) {
+    auto* self = static_cast<Application*>(userData);
+    if (!self->suppressBufferChanged_) gtk_text_buffer_set_modified(buffer, TRUE);
+    self->UpdateStatusBar();
+    self->UpdateWindowTitle();
+}
+
+void Application::OnOpenClicked(GtkButton*, gpointer userData) {
+    static_cast<Application*>(userData)->OpenFileDialog();
+}
+
+void Application::OnSaveClicked(GtkButton*, gpointer userData) {
+    static_cast<Application*>(userData)->SaveFile();
+}
+
+void Application::OnSaveAsClicked(GtkButton*, gpointer userData) {
+    static_cast<Application*>(userData)->SaveFileDialog();
+}
+
+void Application::OnNewClicked(GtkButton*, gpointer userData) {
+    static_cast<Application*>(userData)->NewBuffer(false);
+}
+
+gboolean Application::OnWindowDelete(GtkWidget*, GdkEvent*, gpointer userData) {
+    auto* self = static_cast<Application*>(userData);
+    return self->ConfirmDiscardOrSave() ? FALSE : TRUE;
+}
+
+gboolean Application::OnRefreshTimer(gpointer userData) {
+    auto* self = static_cast<Application*>(userData);
+    if (!self->window_) return G_SOURCE_REMOVE;
+    self->UpdateStatusBar();
+    return G_SOURCE_CONTINUE;
+}
+
+void Application::BuildWindow(GtkApplication* app) {
+    window_ = gtk_application_window_new(app);
+    gtk_window_set_default_size(GTK_WINDOW(window_), 1400, 900);
+    g_signal_connect(window_, "delete-event", G_CALLBACK(OnWindowDelete), this);
+
+    GtkWidget* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(window_), root);
+
+    GtkWidget* toolbar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(toolbar), 8);
+
+    GtkWidget* newButton = gtk_button_new_with_label("New");
+    GtkWidget* openButton = gtk_button_new_with_label("Open");
+    GtkWidget* saveButton = gtk_button_new_with_label("Save");
+    GtkWidget* saveAsButton = gtk_button_new_with_label("Save As");
+    GtkWidget* editorLabel = gtk_label_new("SentinelEditor");
+    gtk_widget_set_hexpand(editorLabel, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(editorLabel), 1.0F);
+
+    gtk_box_pack_start(GTK_BOX(toolbar), newButton, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(toolbar), openButton, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(toolbar), saveButton, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(toolbar), saveAsButton, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(toolbar), editorLabel, TRUE, TRUE, 8);
+    gtk_box_pack_start(GTK_BOX(root), toolbar, FALSE, FALSE, 0);
+
+    GtkWidget* separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_pack_start(GTK_BOX(root), separator, FALSE, FALSE, 0);
+
+    GtkWidget* scrolled = gtk_scrolled_window_new(nullptr, nullptr);
+    gtk_scrolled_window_set_policy(
+        GTK_SCROLLED_WINDOW(scrolled),
+        GTK_POLICY_AUTOMATIC,
+        GTK_POLICY_AUTOMATIC
+    );
+    gtk_widget_set_hexpand(scrolled, TRUE);
+    gtk_widget_set_vexpand(scrolled, TRUE);
+
+    textView_ = gtk_text_view_new();
+    textBuffer_ = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textView_));
+    gtk_text_view_set_monospace(GTK_TEXT_VIEW(textView_), TRUE);
+    gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(textView_), GTK_WRAP_NONE);
+    gtk_text_view_set_left_margin(GTK_TEXT_VIEW(textView_), 12);
+    gtk_text_view_set_right_margin(GTK_TEXT_VIEW(textView_), 12);
+    gtk_text_view_set_top_margin(GTK_TEXT_VIEW(textView_), 10);
+    gtk_text_view_set_bottom_margin(GTK_TEXT_VIEW(textView_), 10);
+    gtk_text_view_set_accepts_tab(GTK_TEXT_VIEW(textView_), TRUE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(textView_), TRUE);
+    gtk_container_add(GTK_CONTAINER(scrolled), textView_);
+    gtk_box_pack_start(GTK_BOX(root), scrolled, TRUE, TRUE, 0);
+
+    GtkWidget* statusBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_container_set_border_width(GTK_CONTAINER(statusBox), 6);
+    statusLabel_ = gtk_label_new("");
+    metricsLabel_ = gtk_label_new("");
+    gtk_widget_set_hexpand(statusLabel_, TRUE);
+    gtk_label_set_xalign(GTK_LABEL(statusLabel_), 0.0F);
+    gtk_label_set_xalign(GTK_LABEL(metricsLabel_), 1.0F);
+    gtk_box_pack_start(GTK_BOX(statusBox), statusLabel_, TRUE, TRUE, 0);
+    gtk_box_pack_end(GTK_BOX(statusBox), metricsLabel_, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(root), statusBox, FALSE, FALSE, 0);
+
+    commandBox_ = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+    gtk_container_set_border_width(GTK_CONTAINER(commandBox_), 6);
+    commandPromptLabel_ = gtk_label_new(":");
+    commandEntry_ = gtk_entry_new();
+    gtk_widget_set_hexpand(commandEntry_, TRUE);
+    gtk_box_pack_start(GTK_BOX(commandBox_), commandPromptLabel_, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(commandBox_), commandEntry_, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(root), commandBox_, FALSE, FALSE, 0);
+
+    g_signal_connect(textView_, "key-press-event", G_CALLBACK(OnTextKeyPress), this);
+    g_signal_connect(commandEntry_, "key-press-event", G_CALLBACK(OnCommandEntryKeyPress), this);
+    g_signal_connect(textBuffer_, "changed", G_CALLBACK(OnBufferChanged), this);
+    g_signal_connect(newButton, "clicked", G_CALLBACK(OnNewClicked), this);
+    g_signal_connect(openButton, "clicked", G_CALLBACK(OnOpenClicked), this);
+    g_signal_connect(saveButton, "clicked", G_CALLBACK(OnSaveClicked), this);
+    g_signal_connect(saveAsButton, "clicked", G_CALLBACK(OnSaveAsClicked), this);
+
+    SyncGtkFromEditorBuffer();
+    if (!initialPath_.empty()) LoadFile(initialPath_, true);
+    else SetStatus("Ready. Press i for Insert mode, : for commands, / to search.");
+
+    refreshTimerId_ = g_timeout_add(
+        RefreshIntervalMilliseconds,
+        OnRefreshTimer,
+        this
+    );
+
+    gtk_widget_show_all(window_);
+    EnterMode(Mode::Normal);
+    UpdateWindowTitle();
+    UpdateStatusBar();
+}
+
+gboolean Application::HandleTextKeyPress(GdkEventKey* event) {
+    if (!event) return FALSE;
+    if (mode_ == Mode::Insert) return HandleInsertKey(event);
+    if (mode_ == Mode::Normal) return HandleNormalKey(event);
+    return TRUE;
+}
+
+gboolean Application::HandleInsertKey(GdkEventKey* event) {
+    if (event->keyval == GDK_KEY_Escape) {
+        EnterMode(Mode::Normal);
+        return TRUE;
+    }
+
+    if ((event->state & GDK_CONTROL_MASK) != 0 &&
+        (event->keyval == GDK_KEY_s || event->keyval == GDK_KEY_S)) {
+        SaveFile();
+        return TRUE;
+    }
+
+    if (event->keyval == GDK_KEY_Return || event->keyval == GDK_KEY_KP_Enter) {
+        typingMetrics_.RecordLine();
+        return FALSE;
+    }
+
+    if (event->keyval == GDK_KEY_Tab || event->keyval == GDK_KEY_ISO_Left_Tab) {
+        typingMetrics_.RecordCharacter();
+        return FALSE;
+    }
+
+    if (!HasEditingModifier(static_cast<GdkModifierType>(event->state))) {
+        const gunichar character = gdk_keyval_to_unicode(event->keyval);
+        if (character >= 0x20U && character != 0x7FU) {
+            typingMetrics_.RecordCharacter();
+        }
+    }
+
+    return FALSE;
+}
+
+gboolean Application::HandleNormalKey(GdkEventKey* event) {
+    const guint key = event->keyval;
+
     if (pendingDelete_) {
         pendingDelete_ = false;
-        if (key == 'd') {
-            const std::size_t oldRow = cursorRow_;
-            if (buffer_.DeleteLine(cursorRow_)) {
-                cursorRow_ = std::min(oldRow, buffer_.LineCount() - 1);
-                cursorColumn_ = 0;
-                preferredColumn_ = 0;
-                status_ = "Deleted line";
-            }
-            return;
-        }
+        if (key == GDK_KEY_d) DeleteLine();
+        else SetStatus("Incomplete delete command cancelled.");
+        return TRUE;
     }
 
     if (pendingGoto_) {
         pendingGoto_ = false;
-        if (key == 'g') {
-            cursorRow_ = 0;
-            cursorColumn_ = 0;
-            preferredColumn_ = 0;
-            return;
+        if (key == GDK_KEY_g) MoveDocumentStart();
+        else SetStatus("Incomplete goto command cancelled.");
+        return TRUE;
+    }
+
+    if ((event->state & GDK_CONTROL_MASK) != 0) {
+        if (key == GDK_KEY_s || key == GDK_KEY_S) {
+            SaveFile();
+            return TRUE;
+        }
+        if (key == GDK_KEY_b || key == GDK_KEY_B || key == GDK_KEY_Page_Up) {
+            for (int index = 0; index < 20; ++index) MoveVertical(-1);
+            return TRUE;
+        }
+        if (key == GDK_KEY_f || key == GDK_KEY_F || key == GDK_KEY_Page_Down) {
+            for (int index = 0; index < 20; ++index) MoveVertical(1);
+            return TRUE;
         }
     }
 
     switch (key) {
-        case 27:
-            status_.clear();
-            break;
-        case KEY_LEFT:
-        case 'h':
+        case GDK_KEY_Left:
+        case GDK_KEY_h:
             MoveHorizontal(-1);
-            break;
-        case KEY_RIGHT:
-        case 'l':
+            return TRUE;
+        case GDK_KEY_Right:
+        case GDK_KEY_l:
             MoveHorizontal(1);
-            break;
-        case KEY_UP:
-        case 'k':
+            return TRUE;
+        case GDK_KEY_Up:
+        case GDK_KEY_k:
             MoveVertical(-1);
-            break;
-        case KEY_DOWN:
-        case 'j':
+            return TRUE;
+        case GDK_KEY_Down:
+        case GDK_KEY_j:
             MoveVertical(1);
-            break;
-        case KEY_PPAGE:
-        case 2: // Ctrl-B
-            MovePage(-1);
-            break;
-        case KEY_NPAGE:
-        case 6: // Ctrl-F
-            MovePage(1);
-            break;
-        case '0':
-        case KEY_HOME:
-            cursorColumn_ = 0;
-            preferredColumn_ = 0;
-            break;
-        case '$':
-        case KEY_END: {
-            const auto& line = buffer_.Line(cursorRow_);
-            cursorColumn_ = line.empty() ? 0 : line.size() - 1;
-            preferredColumn_ = cursorColumn_;
-            break;
-        }
-        case 'w':
+            return TRUE;
+        case GDK_KEY_Page_Up:
+            for (int index = 0; index < 20; ++index) MoveVertical(-1);
+            return TRUE;
+        case GDK_KEY_Page_Down:
+            for (int index = 0; index < 20; ++index) MoveVertical(1);
+            return TRUE;
+        case GDK_KEY_0:
+        case GDK_KEY_Home:
+            MoveLineStart();
+            return TRUE;
+        case GDK_KEY_dollar:
+        case GDK_KEY_End:
+            MoveLineEnd(false);
+            return TRUE;
+        case GDK_KEY_w:
             MoveWordForward();
-            break;
-        case 'b':
+            return TRUE;
+        case GDK_KEY_b:
             MoveWordBackward();
-            break;
-        case 'g':
+            return TRUE;
+        case GDK_KEY_g:
             pendingGoto_ = true;
-            status_ = "g";
-            break;
-        case 'G':
-            cursorRow_ = buffer_.LineCount() - 1;
-            cursorColumn_ = 0;
-            preferredColumn_ = 0;
-            break;
-        case 'i':
-            EnterInsertMode();
-            break;
-        case 'a': {
-            const auto& line = buffer_.Line(cursorRow_);
-            cursorColumn_ = line.empty() ? 0 : std::min(line.size(), cursorColumn_ + 1);
-            EnterInsertMode();
-            break;
+            SetStatus("g");
+            return TRUE;
+        case GDK_KEY_G:
+            MoveDocumentEnd();
+            return TRUE;
+        case GDK_KEY_i:
+            EnterMode(Mode::Insert);
+            return TRUE;
+        case GDK_KEY_a: {
+            GtkTextIter iter = CursorIter();
+            if (!gtk_text_iter_ends_line(&iter)) gtk_text_iter_forward_char(&iter);
+            PlaceCursor(iter, false);
+            EnterMode(Mode::Insert);
+            return TRUE;
         }
-        case 'I':
-            cursorColumn_ = 0;
-            EnterInsertMode();
-            break;
-        case 'A':
-            cursorColumn_ = buffer_.Line(cursorRow_).size();
-            EnterInsertMode();
-            break;
-        case 'o':
-            if (buffer_.InsertBlankLineAfter(cursorRow_)) {
-                typingMetrics_.RecordLine();
-                ++cursorRow_;
-                cursorColumn_ = 0;
-                preferredColumn_ = 0;
-                EnterInsertMode();
-            }
-            break;
-        case 'O':
-            if (buffer_.InsertBlankLineBefore(cursorRow_)) {
-                typingMetrics_.RecordLine();
-                cursorColumn_ = 0;
-                preferredColumn_ = 0;
-                EnterInsertMode();
-            }
-            break;
-        case 'x':
-            if (buffer_.EraseCharacter(cursorRow_, cursorColumn_)) {
-                status_ = "Deleted character";
-            }
-            break;
-        case 'd':
+        case GDK_KEY_I:
+            MoveLineStart();
+            EnterMode(Mode::Insert);
+            return TRUE;
+        case GDK_KEY_A:
+            MoveLineEnd(true);
+            EnterMode(Mode::Insert);
+            return TRUE;
+        case GDK_KEY_o:
+            OpenLineBelow();
+            return TRUE;
+        case GDK_KEY_O:
+            OpenLineAbove();
+            return TRUE;
+        case GDK_KEY_x:
+            DeleteCharacter();
+            return TRUE;
+        case GDK_KEY_d:
             pendingDelete_ = true;
-            status_ = "d";
-            break;
-        case ':':
-            EnterCommandMode();
-            break;
-        case '/':
-            EnterSearchMode();
-            break;
-        case 'n':
-            if (lastSearch_.empty()) status_ = "No previous search";
-            else if (!FindNext(lastSearch_, true)) status_ = "Pattern not found: " + lastSearch_;
-            break;
+            SetStatus("d");
+            return TRUE;
+        case GDK_KEY_colon:
+            EnterMode(Mode::Command);
+            return TRUE;
+        case GDK_KEY_slash:
+            EnterMode(Mode::Search);
+            return TRUE;
+        case GDK_KEY_n:
+            if (lastSearch_.empty()) SetStatus("No previous search.");
+            else if (!FindNext(lastSearch_, true)) SetStatus("Pattern not found: " + lastSearch_);
+            return TRUE;
+        case GDK_KEY_Escape:
+            pendingDelete_ = false;
+            pendingGoto_ = false;
+            SetStatus("");
+            return TRUE;
         default:
-            break;
+            return TRUE;
     }
 }
 
-void Application::HandleInsertInput(int key) {
-    if (key == 27) {
-        EnterNormalMode();
-        return;
+gboolean Application::HandleCommandEntryKey(GdkEventKey* event) {
+    if (!event) return FALSE;
+
+    if (event->keyval == GDK_KEY_Escape) {
+        EnterMode(Mode::Normal);
+        return TRUE;
     }
 
-    if (key == KEY_LEFT) {
-        if (cursorColumn_ > 0) --cursorColumn_;
-        preferredColumn_ = cursorColumn_;
-        return;
-    }
-    if (key == KEY_RIGHT) {
-        cursorColumn_ = std::min(buffer_.Line(cursorRow_).size(), cursorColumn_ + 1);
-        preferredColumn_ = cursorColumn_;
-        return;
-    }
-    if (key == KEY_UP) {
-        MoveVertical(-1);
-        return;
-    }
-    if (key == KEY_DOWN) {
-        MoveVertical(1);
-        return;
-    }
-    if (key == KEY_HOME) {
-        cursorColumn_ = 0;
-        preferredColumn_ = 0;
-        return;
-    }
-    if (key == KEY_END) {
-        cursorColumn_ = buffer_.Line(cursorRow_).size();
-        preferredColumn_ = cursorColumn_;
-        return;
+    if (event->keyval != GDK_KEY_Return && event->keyval != GDK_KEY_KP_Enter) {
+        return FALSE;
     }
 
-    if (key == '\n' || key == KEY_ENTER) {
-        if (buffer_.SplitLine(cursorRow_, cursorColumn_)) {
-            typingMetrics_.RecordLine();
-            ++cursorRow_;
-            cursorColumn_ = 0;
-            preferredColumn_ = 0;
-        }
-        return;
-    }
+    const char* raw = gtk_entry_get_text(GTK_ENTRY(commandEntry_));
+    const std::string value = raw ? raw : "";
+    const Mode previousMode = mode_;
+    EnterMode(Mode::Normal);
 
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        buffer_.Backspace(cursorRow_, cursorColumn_);
-        preferredColumn_ = cursorColumn_;
-        return;
-    }
-
-#ifdef KEY_DC
-    if (key == KEY_DC) {
-        buffer_.DeleteForward(cursorRow_, cursorColumn_);
-        preferredColumn_ = cursorColumn_;
-        return;
-    }
-#endif
-
-    if (key >= 32 && key <= 255) {
-        if (buffer_.InsertCharacter(cursorRow_, cursorColumn_, static_cast<char>(key))) {
-            typingMetrics_.RecordCharacter();
-            ++cursorColumn_;
-            preferredColumn_ = cursorColumn_;
+    if (previousMode == Mode::Command) {
+        ExecuteCommand(value);
+    } else if (previousMode == Mode::Search) {
+        if (!value.empty()) {
+            lastSearch_ = value;
+            if (!FindNext(value, true)) SetStatus("Pattern not found: " + value);
         }
     }
+
+    return TRUE;
 }
 
-void Application::HandleCommandInput(int key) {
-    if (key == 27) {
-        EnterNormalMode();
-        return;
-    }
-    if (key == '\n' || key == KEY_ENTER) {
-        const std::string command = commandBuffer_;
-        commandBuffer_.clear();
-        mode_ = Mode::Normal;
-        ExecuteCommand(command);
-        return;
-    }
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        if (!commandBuffer_.empty()) commandBuffer_.pop_back();
-        return;
-    }
-    if (key >= 32 && key <= 255) commandBuffer_.push_back(static_cast<char>(key));
-}
-
-void Application::HandleSearchInput(int key) {
-    if (key == 27) {
-        EnterNormalMode();
-        return;
-    }
-    if (key == '\n' || key == KEY_ENTER) {
-        const std::string query = searchBuffer_;
-        searchBuffer_.clear();
-        mode_ = Mode::Normal;
-        if (query.empty()) return;
-        lastSearch_ = query;
-        if (!FindNext(query, true)) status_ = "Pattern not found: " + query;
-        return;
-    }
-    if (key == KEY_BACKSPACE || key == 127 || key == 8) {
-        if (!searchBuffer_.empty()) searchBuffer_.pop_back();
-        return;
-    }
-    if (key >= 32 && key <= 255) searchBuffer_.push_back(static_cast<char>(key));
-}
-
-void Application::HandleMouse() {
-    MEVENT event{};
-    if (getmouse(&event) != OK) return;
-
-    if (IsWheelUp(event.bstate)) {
-        topLine_ = topLine_ > MouseWheelStep ? topLine_ - MouseWheelStep : 0;
-        return;
-    }
-    if (IsWheelDown(event.bstate)) {
-        const std::size_t maximum = buffer_.LineCount() > TextRows()
-            ? buffer_.LineCount() - TextRows()
-            : 0;
-        topLine_ = std::min(maximum, topLine_ + MouseWheelStep);
-        return;
-    }
-
-    if ((event.bstate & BUTTON1_CLICKED) == 0 &&
-        (event.bstate & BUTTON1_PRESSED) == 0) {
-        return;
-    }
-
-    int height = 0;
-    int width = 0;
-    getmaxyx(stdscr, height, width);
-    if (event.y < 0 || event.y >= height - 2) return;
-
-    const std::size_t row = topLine_ + static_cast<std::size_t>(event.y);
-    if (row >= buffer_.LineCount()) return;
-
-    cursorRow_ = row;
-    const int textX = event.x - static_cast<int>(GutterWidth());
-    cursorColumn_ = leftColumn_ + static_cast<std::size_t>(std::max(0, textX));
-    preferredColumn_ = cursorColumn_;
-    ClampCursor();
-}
-
-void Application::EnterNormalMode() {
-    mode_ = Mode::Normal;
-    commandBuffer_.clear();
-    searchBuffer_.clear();
+void Application::EnterMode(Mode mode) {
+    mode_ = mode;
     pendingDelete_ = false;
     pendingGoto_ = false;
 
-    const auto& line = buffer_.Line(cursorRow_);
-    if (!line.empty() && cursorColumn_ == line.size()) --cursorColumn_;
-    ClampCursor();
-}
+    if (!textView_) return;
 
-void Application::EnterInsertMode() {
-    mode_ = Mode::Insert;
-    pendingDelete_ = false;
-    pendingGoto_ = false;
-    status_.clear();
-    ClampCursor();
-}
+    if (mode_ == Mode::Insert) {
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(textView_), TRUE);
+        gtk_widget_hide(commandBox_);
+        gtk_widget_grab_focus(textView_);
+        SetStatus("INSERT mode");
+    } else if (mode_ == Mode::Normal) {
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(textView_), FALSE);
+        gtk_widget_hide(commandBox_);
+        gtk_widget_grab_focus(textView_);
+    } else {
+        gtk_text_view_set_editable(GTK_TEXT_VIEW(textView_), FALSE);
+        gtk_label_set_text(
+            GTK_LABEL(commandPromptLabel_),
+            mode_ == Mode::Command ? ":" : "/"
+        );
+        gtk_entry_set_text(GTK_ENTRY(commandEntry_), "");
+        gtk_widget_show(commandBox_);
+        gtk_widget_grab_focus(commandEntry_);
+    }
 
-void Application::EnterCommandMode() {
-    mode_ = Mode::Command;
-    commandBuffer_.clear();
-    pendingDelete_ = false;
-    pendingGoto_ = false;
-}
-
-void Application::EnterSearchMode() {
-    mode_ = Mode::Search;
-    searchBuffer_.clear();
-    pendingDelete_ = false;
-    pendingGoto_ = false;
+    UpdateStatusBar();
 }
 
 void Application::ExecuteCommand(const std::string& rawCommand) {
@@ -415,355 +424,446 @@ void Application::ExecuteCommand(const std::string& rawCommand) {
         return;
     }
     if (operation == "q") {
-        if (buffer_.Modified()) {
-            status_ = "No write since last change (use :q! to discard)";
+        if (gtk_text_buffer_get_modified(textBuffer_)) {
+            SetStatus("No write since last change (use :q! to discard).");
             return;
         }
-        running_ = false;
+        g_application_quit(G_APPLICATION(app_));
         return;
     }
     if (operation == "q!") {
-        running_ = false;
+        gtk_text_buffer_set_modified(textBuffer_, FALSE);
+        g_application_quit(G_APPLICATION(app_));
         return;
     }
     if (operation == "wq" || operation == "x") {
-        if (SaveFile(argument)) running_ = false;
+        if (SaveFile(argument)) g_application_quit(G_APPLICATION(app_));
         return;
     }
     if (operation == "e" || operation == "e!") {
         if (argument.empty()) {
-            status_ = "Usage: :e[!] <path>";
+            SetStatus("Usage: :e[!] <path>");
             return;
         }
         LoadFile(argument, operation == "e!");
         return;
     }
     if (operation == "new" || operation == "new!") {
-        if (buffer_.Modified() && operation != "new!") {
-            status_ = "No write since last change (use :new! to discard)";
-            return;
-        }
-        buffer_.NewEmpty();
-        cursorRow_ = cursorColumn_ = preferredColumn_ = topLine_ = leftColumn_ = 0;
-        status_ = "New buffer";
+        NewBuffer(operation == "new!");
         return;
     }
     if (operation == "help") {
-        status_ = "Normal: hjkl/arrows w b 0 $ gg G i a I A o O x dd / n | Ex: :w :q :q! :wq :e :e! :new";
+        SetStatus(
+            "NORMAL: hjkl/arrows w b 0 $ gg G i a I A o O x dd / n | "
+            "Ex: :w :q :q! :wq :e :e! :new"
+        );
         return;
     }
 
-    status_ = "Not an editor command: " + operation;
+    SetStatus("Not an editor command: " + operation);
 }
 
-bool Application::LoadFile(const std::string& path, bool force) {
-    if (buffer_.Modified() && !force) {
-        status_ = "No write since last change (use :e! <path> to discard)";
+bool Application::LoadFile(const std::filesystem::path& path, bool force) {
+    if (gtk_text_buffer_get_modified(textBuffer_) && !force) {
+        SetStatus("No write since last change (use :e! <path> to discard).");
         return false;
     }
 
     std::string error;
-    if (!buffer_.Load(path, error)) {
-        status_ = error;
+    if (!editorBuffer_.Load(path, error)) {
+        SetStatus(error);
         return false;
     }
 
-    cursorRow_ = cursorColumn_ = preferredColumn_ = topLine_ = leftColumn_ = 0;
-    status_ = "Opened " + buffer_.Path().string();
+    SyncGtkFromEditorBuffer();
+    SetStatus("Opened " + editorBuffer_.Path().string());
+    UpdateWindowTitle();
     return true;
 }
 
-bool Application::SaveFile(const std::string& path) {
+bool Application::SaveFile(const std::filesystem::path& path) {
+    if (path.empty() && !editorBuffer_.HasPath()) return SaveFileDialog();
+
+    SyncEditorBufferFromGtk();
+
     std::string error;
     const bool saved = path.empty()
-        ? buffer_.Save(error)
-        : buffer_.SaveAs(path, error);
+        ? editorBuffer_.Save(error)
+        : editorBuffer_.SaveAs(path, error);
+
     if (!saved) {
-        status_ = error;
+        SetStatus(error);
         return false;
     }
 
-    status_ = "Written " + buffer_.Path().string() + " (" +
-        std::to_string(buffer_.LineCount()) + " lines)";
+    gtk_text_buffer_set_modified(textBuffer_, FALSE);
+    SetStatus(
+        "Written " + editorBuffer_.Path().string() + " (" +
+        std::to_string(gtk_text_buffer_get_line_count(textBuffer_)) + " lines)"
+    );
+    UpdateWindowTitle();
     return true;
 }
 
-void Application::MoveHorizontal(int delta) {
-    const auto& line = buffer_.Line(cursorRow_);
-    if (delta < 0) {
-        if (cursorColumn_ > 0) --cursorColumn_;
-    } else if (!line.empty() && cursorColumn_ + 1 < line.size()) {
-        ++cursorColumn_;
+void Application::NewBuffer(bool force) {
+    if (gtk_text_buffer_get_modified(textBuffer_) && !force) {
+        SetStatus("No write since last change (use :new! to discard).");
+        return;
     }
-    preferredColumn_ = cursorColumn_;
+
+    editorBuffer_.NewEmpty();
+    SyncGtkFromEditorBuffer();
+    SetStatus("New buffer");
+    UpdateWindowTitle();
 }
 
-void Application::MoveVertical(int delta) {
-    if (delta < 0) {
-        if (cursorRow_ > 0) --cursorRow_;
-    } else if (cursorRow_ + 1 < buffer_.LineCount()) {
-        ++cursorRow_;
+void Application::OpenFileDialog() {
+    if (!ConfirmDiscardOrSave()) return;
+
+    GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        "Open file",
+        GTK_WINDOW(window_),
+        GTK_FILE_CHOOSER_ACTION_OPEN,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Open", GTK_RESPONSE_ACCEPT,
+        nullptr
+    );
+
+    if (editorBuffer_.HasPath()) {
+        const auto parent = editorBuffer_.Path().parent_path();
+        if (!parent.empty()) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), parent.string().c_str());
     }
 
-    const auto& line = buffer_.Line(cursorRow_);
-    const std::size_t maximum = mode_ == Mode::Insert
-        ? line.size()
-        : (line.empty() ? 0 : line.size() - 1);
-    cursorColumn_ = std::min(preferredColumn_, maximum);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (filename) {
+            LoadFile(filename, true);
+            g_free(filename);
+        }
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
+bool Application::SaveFileDialog() {
+    GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        "Save file",
+        GTK_WINDOW(window_),
+        GTK_FILE_CHOOSER_ACTION_SAVE,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Save", GTK_RESPONSE_ACCEPT,
+        nullptr
+    );
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+
+    if (editorBuffer_.HasPath()) {
+        gtk_file_chooser_set_filename(
+            GTK_FILE_CHOOSER(dialog),
+            editorBuffer_.Path().string().c_str()
+        );
+    }
+
+    bool saved = false;
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        if (filename) {
+            saved = SaveFile(filename);
+            g_free(filename);
+        }
+    }
+
+    gtk_widget_destroy(dialog);
+    return saved;
+}
+
+bool Application::ConfirmDiscardOrSave() {
+    if (!textBuffer_ || !gtk_text_buffer_get_modified(textBuffer_)) return true;
+
+    GtkWidget* dialog = gtk_message_dialog_new(
+        GTK_WINDOW(window_),
+        GTK_DIALOG_MODAL,
+        GTK_MESSAGE_WARNING,
+        GTK_BUTTONS_NONE,
+        "The current document has unsaved changes."
+    );
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(dialog),
+        "Save the document before continuing, discard the changes, or cancel."
+    );
+    gtk_dialog_add_buttons(
+        GTK_DIALOG(dialog),
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Discard", GTK_RESPONSE_REJECT,
+        "Save", GTK_RESPONSE_ACCEPT,
+        nullptr
+    );
+
+    const gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    if (response == GTK_RESPONSE_REJECT) {
+        gtk_text_buffer_set_modified(textBuffer_, FALSE);
+        return true;
+    }
+    if (response == GTK_RESPONSE_ACCEPT) return SaveFile();
+    return false;
+}
+
+void Application::SyncGtkFromEditorBuffer() {
+    if (!textBuffer_) return;
+    suppressBufferChanged_ = true;
+    const std::string text = editorBuffer_.Text();
+    gtk_text_buffer_set_text(textBuffer_, text.c_str(), static_cast<gint>(text.size()));
+    gtk_text_buffer_set_modified(textBuffer_, FALSE);
+
+    GtkTextIter start;
+    gtk_text_buffer_get_start_iter(textBuffer_, &start);
+    gtk_text_buffer_place_cursor(textBuffer_, &start);
+    suppressBufferChanged_ = false;
+}
+
+void Application::SyncEditorBufferFromGtk() {
+    GtkTextIter start;
+    GtkTextIter end;
+    gtk_text_buffer_get_bounds(textBuffer_, &start, &end);
+    char* text = gtk_text_buffer_get_text(textBuffer_, &start, &end, TRUE);
+    editorBuffer_.SetText(text ? text : "", true);
+    g_free(text);
+}
+
+GtkTextIter Application::CursorIter() const {
+    GtkTextIter iter;
+    GtkTextMark* insert = gtk_text_buffer_get_insert(textBuffer_);
+    gtk_text_buffer_get_iter_at_mark(textBuffer_, &iter, insert);
+    return iter;
+}
+
+void Application::PlaceCursor(GtkTextIter iter, bool scroll) {
+    gtk_text_buffer_place_cursor(textBuffer_, &iter);
+    if (scroll) {
+        GtkTextMark* insert = gtk_text_buffer_get_insert(textBuffer_);
+        gtk_text_view_scroll_mark_onscreen(GTK_TEXT_VIEW(textView_), insert);
+    }
+    UpdateStatusBar();
+}
+
+void Application::MoveHorizontal(int direction) {
+    GtkTextIter iter = CursorIter();
+    if (direction < 0) {
+        if (gtk_text_iter_get_line_offset(&iter) > 0) gtk_text_iter_backward_char(&iter);
+    } else if (!gtk_text_iter_ends_line(&iter)) {
+        gtk_text_iter_forward_char(&iter);
+    }
+    PlaceCursor(iter);
+}
+
+void Application::MoveVertical(int direction) {
+    GtkTextIter current = CursorIter();
+    const int currentLine = gtk_text_iter_get_line(&current);
+    const int targetLine = currentLine + direction;
+    const int lineCount = gtk_text_buffer_get_line_count(textBuffer_);
+    if (targetLine < 0 || targetLine >= lineCount) return;
+
+    const int desiredOffset = gtk_text_iter_get_line_offset(&current);
+    GtkTextIter target;
+    gtk_text_buffer_get_iter_at_line(textBuffer_, &target, targetLine);
+    GtkTextIter lineEnd = target;
+    gtk_text_iter_forward_to_line_end(&lineEnd);
+    const int maximumOffset = gtk_text_iter_get_line_offset(&lineEnd);
+    gtk_text_iter_set_line_offset(&target, std::min(desiredOffset, maximumOffset));
+    PlaceCursor(target);
 }
 
 void Application::MoveWordForward() {
-    std::size_t row = cursorRow_;
-    std::size_t column = cursorColumn_;
-
-    while (row < buffer_.LineCount()) {
-        const auto& line = buffer_.Line(row);
-        if (column < line.size()) {
-            if (IsWordCharacter(line[column])) {
-                while (column < line.size() && IsWordCharacter(line[column])) ++column;
-            }
-            while (column < line.size() && !IsWordCharacter(line[column])) ++column;
-            if (column < line.size()) {
-                cursorRow_ = row;
-                cursorColumn_ = column;
-                preferredColumn_ = column;
-                return;
-            }
-        }
-        ++row;
-        column = 0;
+    GtkTextIter iter = CursorIter();
+    if (!gtk_text_iter_is_end(&iter)) gtk_text_iter_forward_char(&iter);
+    while (!gtk_text_iter_is_end(&iter) && !gtk_text_iter_starts_word(&iter)) {
+        gtk_text_iter_forward_char(&iter);
     }
+    PlaceCursor(iter);
 }
 
 void Application::MoveWordBackward() {
-    std::size_t row = cursorRow_;
-    std::size_t column = cursorColumn_;
-
-    while (true) {
-        const auto& line = buffer_.Line(row);
-        if (!line.empty()) {
-            if (column >= line.size()) column = line.size() - 1;
-            if (column > 0) --column;
-            while (column > 0 && !IsWordCharacter(line[column])) --column;
-            while (column > 0 && IsWordCharacter(line[column - 1])) --column;
-            if (IsWordCharacter(line[column])) {
-                cursorRow_ = row;
-                cursorColumn_ = column;
-                preferredColumn_ = column;
-                return;
-            }
-        }
-        if (row == 0) return;
-        --row;
-        column = buffer_.Line(row).size();
+    GtkTextIter iter = CursorIter();
+    if (!gtk_text_iter_is_start(&iter)) gtk_text_iter_backward_char(&iter);
+    while (!gtk_text_iter_is_start(&iter) && !gtk_text_iter_starts_word(&iter)) {
+        gtk_text_iter_backward_char(&iter);
     }
+    PlaceCursor(iter);
 }
 
-void Application::MovePage(int direction) {
-    const std::size_t page = std::max<std::size_t>(1, TextRows() - 1);
-    if (direction < 0) {
-        cursorRow_ = cursorRow_ > page ? cursorRow_ - page : 0;
+void Application::MoveLineStart() {
+    GtkTextIter iter = CursorIter();
+    gtk_text_iter_set_line_offset(&iter, 0);
+    PlaceCursor(iter);
+}
+
+void Application::MoveLineEnd(bool insertionPoint) {
+    GtkTextIter iter = CursorIter();
+    gtk_text_iter_forward_to_line_end(&iter);
+    if (!insertionPoint && gtk_text_iter_get_line_offset(&iter) > 0) {
+        gtk_text_iter_backward_char(&iter);
+    }
+    PlaceCursor(iter);
+}
+
+void Application::MoveDocumentStart() {
+    GtkTextIter iter;
+    gtk_text_buffer_get_start_iter(textBuffer_, &iter);
+    PlaceCursor(iter);
+}
+
+void Application::MoveDocumentEnd() {
+    GtkTextIter iter;
+    gtk_text_buffer_get_end_iter(textBuffer_, &iter);
+    PlaceCursor(iter);
+}
+
+void Application::DeleteCharacter() {
+    GtkTextIter start = CursorIter();
+    if (gtk_text_iter_ends_line(&start) || gtk_text_iter_is_end(&start)) return;
+    GtkTextIter end = start;
+    gtk_text_iter_forward_char(&end);
+    gtk_text_buffer_delete(textBuffer_, &start, &end);
+    PlaceCursor(start);
+    SetStatus("Deleted character");
+}
+
+void Application::DeleteLine() {
+    GtkTextIter cursor = CursorIter();
+    const int line = gtk_text_iter_get_line(&cursor);
+    const int lineCount = gtk_text_buffer_get_line_count(textBuffer_);
+
+    GtkTextIter start;
+    GtkTextIter end;
+
+    if (lineCount <= 1) {
+        gtk_text_buffer_get_bounds(textBuffer_, &start, &end);
+    } else if (line + 1 < lineCount) {
+        gtk_text_buffer_get_iter_at_line(textBuffer_, &start, line);
+        gtk_text_buffer_get_iter_at_line(textBuffer_, &end, line + 1);
     } else {
-        cursorRow_ = std::min(buffer_.LineCount() - 1, cursorRow_ + page);
+        gtk_text_buffer_get_iter_at_line(textBuffer_, &start, line);
+        gtk_text_iter_backward_char(&start);
+        gtk_text_buffer_get_end_iter(textBuffer_, &end);
     }
-    const auto& line = buffer_.Line(cursorRow_);
-    const std::size_t maximum = line.empty() ? 0 : line.size() - 1;
-    cursorColumn_ = std::min(preferredColumn_, maximum);
+
+    gtk_text_buffer_delete(textBuffer_, &start, &end);
+    PlaceCursor(start);
+    SetStatus("Deleted line");
 }
 
-void Application::ClampCursor() {
-    if (buffer_.LineCount() == 0) return;
-    cursorRow_ = std::min(cursorRow_, buffer_.LineCount() - 1);
-    const auto& line = buffer_.Line(cursorRow_);
-    const std::size_t maximum = mode_ == Mode::Insert
-        ? line.size()
-        : (line.empty() ? 0 : line.size() - 1);
-    cursorColumn_ = std::min(cursorColumn_, maximum);
+void Application::OpenLineBelow() {
+    GtkTextIter iter = CursorIter();
+    gtk_text_iter_forward_to_line_end(&iter);
+    gtk_text_buffer_insert(textBuffer_, &iter, "\n", 1);
+    typingMetrics_.RecordLine();
+    PlaceCursor(iter);
+    EnterMode(Mode::Insert);
 }
 
-void Application::EnsureCursorVisible() {
-    const std::size_t rows = TextRows();
-    const std::size_t columns = TextColumns();
+void Application::OpenLineAbove() {
+    GtkTextIter iter = CursorIter();
+    gtk_text_iter_set_line_offset(&iter, 0);
+    GtkTextMark* mark = gtk_text_buffer_create_mark(textBuffer_, nullptr, &iter, TRUE);
+    gtk_text_buffer_insert(textBuffer_, &iter, "\n", 1);
+    typingMetrics_.RecordLine();
 
-    if (cursorRow_ < topLine_) topLine_ = cursorRow_;
-    else if (cursorRow_ >= topLine_ + rows) topLine_ = cursorRow_ - rows + 1;
-
-    if (cursorColumn_ < leftColumn_) leftColumn_ = cursorColumn_;
-    else if (cursorColumn_ >= leftColumn_ + columns) {
-        leftColumn_ = cursorColumn_ - columns + 1;
-    }
+    GtkTextIter blankLine;
+    gtk_text_buffer_get_iter_at_mark(textBuffer_, &blankLine, mark);
+    gtk_text_buffer_delete_mark(textBuffer_, mark);
+    PlaceCursor(blankLine);
+    EnterMode(Mode::Insert);
 }
 
 bool Application::FindNext(const std::string& query, bool wrap) {
     if (query.empty()) return false;
 
-    const std::size_t startRow = cursorRow_;
-    std::size_t row = cursorRow_;
-    std::size_t startColumn = std::min(cursorColumn_ + 1, buffer_.Line(row).size());
+    GtkTextIter start = CursorIter();
+    if (!gtk_text_iter_is_end(&start)) gtk_text_iter_forward_char(&start);
 
-    do {
-        const auto& line = buffer_.Line(row);
-        const auto found = line.find(query, startColumn);
-        if (found != std::string::npos) {
-            cursorRow_ = row;
-            cursorColumn_ = found;
-            preferredColumn_ = found;
-            status_ = "/" + query;
-            return true;
-        }
+    GtkTextIter matchStart;
+    GtkTextIter matchEnd;
+    gboolean found = gtk_text_iter_forward_search(
+        &start,
+        query.c_str(),
+        GTK_TEXT_SEARCH_TEXT_ONLY,
+        &matchStart,
+        &matchEnd,
+        nullptr
+    );
 
-        row = (row + 1) % buffer_.LineCount();
-        startColumn = 0;
-        if (!wrap && row <= startRow) break;
-    } while (row != startRow);
-
-    if (wrap) {
-        const auto& line = buffer_.Line(startRow);
-        const auto found = line.find(query, 0);
-        if (found != std::string::npos && found <= cursorColumn_) {
-            cursorColumn_ = found;
-            preferredColumn_ = found;
-            status_ = "/" + query + " (wrapped)";
-            return true;
-        }
-    }
-
-    return false;
-}
-
-void Application::Render() {
-    erase();
-    int height = 0;
-    int width = 0;
-    getmaxyx(stdscr, height, width);
-
-    RenderBuffer(height, width);
-    RenderStatusLine(std::max(0, height - 2), width);
-    RenderCommandLine(std::max(0, height - 1), width);
-
-    if (height >= 3 && mode_ != Mode::Command && mode_ != Mode::Search) {
-        const int screenRow = static_cast<int>(cursorRow_ - topLine_);
-        const std::size_t logicalStart = std::min(leftColumn_, buffer_.Line(cursorRow_).size());
-        const std::size_t logicalEnd = std::min(cursorColumn_, buffer_.Line(cursorRow_).size());
-        const std::string prefix = logicalEnd >= logicalStart
-            ? buffer_.Line(cursorRow_).substr(logicalStart, logicalEnd - logicalStart)
-            : std::string{};
-        const int screenColumn = static_cast<int>(GutterWidth() + ExpandTabs(prefix).size());
-        move(
-            std::clamp(screenRow, 0, height - 3),
-            std::clamp(screenColumn, 0, std::max(0, width - 1))
+    bool wrapped = false;
+    if (!found && wrap) {
+        gtk_text_buffer_get_start_iter(textBuffer_, &start);
+        found = gtk_text_iter_forward_search(
+            &start,
+            query.c_str(),
+            GTK_TEXT_SEARCH_TEXT_ONLY,
+            &matchStart,
+            &matchEnd,
+            nullptr
         );
-        curs_set(1);
+        wrapped = found != FALSE;
     }
 
-    refresh();
+    if (!found) return false;
+
+    gtk_text_buffer_select_range(textBuffer_, &matchStart, &matchEnd);
+    gtk_text_view_scroll_to_iter(
+        GTK_TEXT_VIEW(textView_),
+        &matchStart,
+        0.15,
+        FALSE,
+        0.0,
+        0.0
+    );
+    SetStatus("/" + query + (wrapped ? " (wrapped)" : ""));
+    return true;
 }
 
-void Application::RenderBuffer(int height, int width) {
-    const int contentRows = std::max(0, height - 2);
-    const int gutter = static_cast<int>(GutterWidth());
-    const int textWidth = std::max(0, width - gutter);
+void Application::UpdateStatusBar() {
+    if (!statusLabel_ || !metricsLabel_ || !textBuffer_) return;
 
-    for (int screenRow = 0; screenRow < contentRows; ++screenRow) {
-        const std::size_t bufferRow = topLine_ + static_cast<std::size_t>(screenRow);
-        if (bufferRow >= buffer_.LineCount()) {
-            if (width > 0) mvaddch(screenRow, 0, '~');
-            continue;
-        }
+    GtkTextIter iter = CursorIter();
+    const int line = gtk_text_iter_get_line(&iter) + 1;
+    const int column = gtk_text_iter_get_line_offset(&iter) + 1;
+    const std::string path = editorBuffer_.HasPath()
+        ? editorBuffer_.Path().string()
+        : "[No Name]";
 
-        std::ostringstream lineNumber;
-        lineNumber.width(std::max(1, gutter - 1));
-        lineNumber << std::right << bufferRow + 1 << ' ';
-        const std::string number = lineNumber.str();
-        if (gutter > 0) mvaddnstr(screenRow, 0, number.c_str(), gutter);
-
-        const auto& source = buffer_.Line(bufferRow);
-        const std::size_t start = std::min(leftColumn_, source.size());
-        const std::string visible = ExpandTabs(source.substr(start));
-        if (textWidth > 0) mvaddnstr(screenRow, gutter, visible.c_str(), textWidth);
-    }
-}
-
-void Application::RenderStatusLine(int row, int width) {
-    if (row < 0 || width <= 0) return;
-    attron(A_REVERSE);
-    move(row, 0);
-    clrtoeol();
-
-    const std::string path = buffer_.HasPath() ? buffer_.Path().string() : "[No Name]";
-    std::ostringstream status;
-    status << " " << ModeName() << "  " << path;
-    if (buffer_.Modified()) status << " [+]";
-    status << "   " << (cursorRow_ + 1) << ":" << (cursorColumn_ + 1)
-           << "   " << buffer_.LineCount() << " lines";
+    std::ostringstream left;
+    left << ModeName() << "  " << path;
+    if (gtk_text_buffer_get_modified(textBuffer_)) left << " [+]";
+    left << "   " << line << ':' << column;
+    if (!status_.empty()) left << "   |   " << status_;
+    gtk_label_set_text(GTK_LABEL(statusLabel_), left.str().c_str());
 
     const auto metrics = typingMetrics_.GetSnapshot();
-    std::ostringstream speed;
-    speed << "LPM " << metrics.linesLastMinute
-          << " | LPH " << metrics.linesLastHour
-          << " | CPM30 " << static_cast<unsigned long long>(
+    std::ostringstream right;
+    right << "LPM " << metrics.linesLastMinute
+          << "   LPH " << metrics.linesLastHour
+          << "   CPM30 " << static_cast<unsigned long long>(
                  metrics.charactersPerMinute30Seconds + 0.5
              );
-
-    const std::string left = status.str();
-    const std::string right = speed.str();
-    const int rightWidth = static_cast<int>(right.size());
-
-    if (rightWidth >= width) {
-        mvaddnstr(row, 0, right.c_str(), width);
-    } else {
-        const int leftWidth = std::max(0, width - rightWidth - 1);
-        if (leftWidth > 0) mvaddnstr(row, 0, left.c_str(), leftWidth);
-        mvaddnstr(row, width - rightWidth, right.c_str(), rightWidth);
-    }
-
-    attroff(A_REVERSE);
+    gtk_label_set_text(GTK_LABEL(metricsLabel_), right.str().c_str());
 }
 
-void Application::RenderCommandLine(int row, int width) {
-    if (row < 0 || width <= 0) return;
-    move(row, 0);
-    clrtoeol();
-
-    if (mode_ == Mode::Command) {
-        const std::string value = ":" + commandBuffer_;
-        mvaddnstr(row, 0, value.c_str(), width);
-        move(row, std::min(width - 1, static_cast<int>(value.size())));
-        curs_set(1);
-        return;
-    }
-    if (mode_ == Mode::Search) {
-        const std::string value = "/" + searchBuffer_;
-        mvaddnstr(row, 0, value.c_str(), width);
-        move(row, std::min(width - 1, static_cast<int>(value.size())));
-        curs_set(1);
-        return;
-    }
-
-    const std::string value = status_.empty()
-        ? "i insert | : command | / search | :help"
-        : status_;
-    mvaddnstr(row, 0, value.c_str(), width);
+void Application::UpdateWindowTitle() {
+    if (!window_) return;
+    const std::string name = editorBuffer_.HasPath()
+        ? editorBuffer_.Path().filename().string()
+        : "Untitled";
+    const std::string modified = textBuffer_ && gtk_text_buffer_get_modified(textBuffer_)
+        ? " *"
+        : "";
+    const std::string title = name + modified + " - SentinelEditor";
+    gtk_window_set_title(GTK_WINDOW(window_), title.c_str());
 }
 
-std::size_t Application::GutterWidth() const {
-    return std::max<std::size_t>(4, std::to_string(buffer_.LineCount()).size() + 2);
-}
-
-std::size_t Application::TextRows() const {
-    int height = 0;
-    int width = 0;
-    getmaxyx(stdscr, height, width);
-    (void)width;
-    return static_cast<std::size_t>(std::max(1, height - 2));
-}
-
-std::size_t Application::TextColumns() const {
-    int height = 0;
-    int width = 0;
-    getmaxyx(stdscr, height, width);
-    (void)height;
-    return static_cast<std::size_t>(std::max(1, width - static_cast<int>(GutterWidth())));
+void Application::SetStatus(std::string status) {
+    status_ = std::move(status);
+    UpdateStatusBar();
 }
 
 std::string Application::ModeName() const {
@@ -790,20 +890,4 @@ std::string Application::Unquote(std::string value) {
         value = value.substr(1, value.size() - 2);
     }
     return value;
-}
-
-std::string Application::ExpandTabs(const std::string& value, std::size_t tabWidth) {
-    std::string result;
-    std::size_t column = 0;
-    for (const char c : value) {
-        if (c == '\t') {
-            const std::size_t spaces = tabWidth - (column % tabWidth);
-            result.append(spaces, ' ');
-            column += spaces;
-        } else {
-            result.push_back(c);
-            ++column;
-        }
-    }
-    return result;
 }
