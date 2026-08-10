@@ -19,3 +19,21 @@ target_compile_options(SentinelStats PRIVATE
     -Wextra
     -Wpedantic
 )
+
+if(BUILD_TESTING)
+    add_executable(SentinelStatsDataTest
+        tests/StatisticsDataTest.cpp
+        src/StatisticsData.cpp
+    )
+    target_include_directories(SentinelStatsDataTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/include
+    )
+    target_link_libraries(SentinelStatsDataTest PRIVATE SentinelShared)
+    target_compile_options(SentinelStatsDataTest PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    add_test(NAME SentinelStats.DataAggregation COMMAND SentinelStatsDataTest)
+endif()
