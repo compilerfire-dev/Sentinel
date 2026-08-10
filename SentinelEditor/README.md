@@ -19,19 +19,25 @@ The main window contains:
 ```text
 New | Open | Save | Save As                         SentinelEditor
 ------------------------------------------------------------------
-
-                  GtkTextView document
-              native multiline text field
-                 native GTK scrolling
-                  mouse + selection
-                  clipboard support
-
+  1 | #include <iostream>
+  2 |
+  3 | int main()
+  4 | {
+  5 |     return 0;
+  6 | }
+    |
+    |                 native GtkTextView document
+    |
 ------------------------------------------------------------------
-NORMAL  main.cpp [+]  14:8              LPM 3  LPH 47  CPM30 186
+NORMAL  main.cpp [+]  5:8               LPM 3  LPH 47  CPM30 186
 : command/search entry (shown only when needed)
 ```
 
 The large central `GtkTextView` is the actual editor. GTK owns text layout, scrolling, mouse positioning, selection, clipboard behavior and UTF-8 text representation.
+
+A dedicated GTK line-number gutter is rendered to the left of the text view. It tracks the text view's vertical scroll position and uses GTK's text-line geometry, so line numbers remain aligned with the corresponding logical lines. The current cursor line is highlighted in the gutter.
+
+The gutter width grows automatically as the document passes line-count digit boundaries such as 99 -> 100 or 999 -> 1000.
 
 ## Modes
 
@@ -153,6 +159,19 @@ Paths containing spaces can be quoted:
 
 Press `/` to reveal the GTK search entry, type a literal string, and press Enter. The matching range is selected in the main text field and scrolled into view. `n` searches for the next occurrence and wraps to the beginning.
 
+## Line-number gutter
+
+`LineNumberGutter` is intentionally separate from the editor controller. It owns a GTK drawing area and listens to:
+
+```text
+GtkAdjustment::value-changed   vertical scrolling
+GtkTextBuffer::changed         inserted/deleted lines and gutter width
+GtkTextBuffer::mark-set        cursor/current-line changes
+GtkWidget::size-allocate       text-view geometry changes
+```
+
+For each repaint it obtains the text view's visible buffer rectangle and the y-range for each visible logical line, then renders the corresponding 1-based line number. The line number of the insertion cursor is drawn at full emphasis with a subtle highlighted row behind it.
+
 ## Source layout
 
 ```text
@@ -162,21 +181,23 @@ SentinelEditor/
 ├── include/
 │   ├── Application.hpp
 │   ├── EditorBuffer.hpp
+│   ├── LineNumberGutter.hpp
 │   └── TypingMetrics.hpp
 ├── src/
 │   ├── Application.cpp
 │   ├── EditorBuffer.cpp
+│   ├── LineNumberGutter.cpp
 │   └── TypingMetrics.cpp
 └── tests/
     ├── EditorBufferTest.cpp
     └── TypingMetricsTest.cpp
 ```
 
-`Application` owns the GTK window, `GtkTextView`, Vim-inspired mode controller, native dialogs, search/command entries, status bar and key dispatch. `EditorBuffer` remains the file-storage model and can synchronize complete GTK text through `Text()` / `SetText()`. `TypingMetrics` owns the rolling activity windows.
+`Application` owns the GTK window, `GtkTextView`, Vim-inspired mode controller, native dialogs, search/command entries, status bar and key dispatch. `LineNumberGutter` owns the scroll-synchronized GTK line-number view. `EditorBuffer` remains the file-storage model and can synchronize complete GTK text through `Text()` / `SetText()`. `TypingMetrics` owns the rolling activity windows.
 
 ## Build
 
-SentinelEditor now links GTK3 rather than ncurses. From the repository root:
+SentinelEditor links GTK3 rather than ncurses. From the repository root:
 
 ```bash
 sudo apt install build-essential cmake pkg-config libgtk-3-dev libncurses-dev
@@ -197,7 +218,6 @@ syntax highlighting
 undo / redo history
 visual mode
 yank / paste registers
-line-number gutter
 multiple tabs / buffers
 split editor panes
 regex search and replace
