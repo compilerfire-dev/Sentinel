@@ -201,6 +201,123 @@ bool TaskTree::RemoveNode(const std::string& id, std::string& errorMessage) {
     return true;
 }
 
+bool TaskTree::RenameNode(
+    const std::string& id,
+    std::string name,
+    std::string& errorMessage
+) {
+    TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+    if (name.empty()) {
+        errorMessage = "Node name cannot be empty.";
+        return false;
+    }
+
+    node->name = std::move(name);
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::MoveNode(
+    const std::string& id,
+    std::string parentId,
+    std::string& errorMessage
+) {
+    TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+
+    const bool root = parentId.empty() || parentId == "root" || parentId == "/";
+    if (root) {
+        parentId.clear();
+    } else {
+        if (parentId == id) {
+            errorMessage = "A node cannot be moved inside itself.";
+            return false;
+        }
+        TaskNode* parent = GetNode(parentId);
+        if (!parent) {
+            errorMessage = "Parent ID does not exist: " + parentId;
+            return false;
+        }
+        if (parent->kind != NodeKind::Folder) {
+            errorMessage = "Parent must be a folder: " + parentId;
+            return false;
+        }
+
+        // Walk upward from the requested parent. If we encounter the node being
+        // moved, the operation would create a cycle in the folder tree.
+        std::string ancestor = parentId;
+        while (!ancestor.empty()) {
+            if (ancestor == id) {
+                errorMessage = "Cannot move a node into its own descendant.";
+                return false;
+            }
+            const TaskNode* current = GetNode(ancestor);
+            if (!current) break;
+            ancestor = current->parentId;
+        }
+    }
+
+    if (node->parentId == parentId) {
+        errorMessage.clear();
+        return true;
+    }
+
+    const std::string oldParent = node->parentId;
+    auto& oldSiblings = oldParent.empty() ? rootIds_ : nodes_.at(oldParent).children;
+    oldSiblings.erase(std::remove(oldSiblings.begin(), oldSiblings.end(), id), oldSiblings.end());
+
+    node = GetNode(id);
+    node->parentId = parentId;
+    if (parentId.empty()) rootIds_.push_back(id);
+    else nodes_.at(parentId).children.push_back(id);
+
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::SetCollapsed(
+    const std::string& id,
+    bool collapsed,
+    std::string& errorMessage
+) {
+    TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+    if (node->kind != NodeKind::Folder) {
+        errorMessage = "Only folders can be collapsed or expanded.";
+        return false;
+    }
+
+    node->collapsed = collapsed;
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::ToggleCollapsed(const std::string& id, std::string& errorMessage) {
+    TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+    if (node->kind != NodeKind::Folder) {
+        errorMessage = "Only folders can be collapsed or expanded.";
+        return false;
+    }
+
+    node->collapsed = !node->collapsed;
+    errorMessage.clear();
+    return true;
+}
+
 bool TaskTree::SetDescription(const std::string& id, std::string description, std::string& errorMessage) {
     TaskNode* node = GetNode(id);
     if (!node) {
@@ -281,7 +398,13 @@ const TaskNode* TaskTree::GetNode(const std::string& id) const {
 
 std::vector<VisibleTreeNode> TaskTree::Flatten() const {
     std::vector<VisibleTreeNode> output;
-    FlattenChildren(rootIds_, "", 0, output);
+    FlattenChildren(rootIds_, "", 0, true, output);
+    return output;
+}
+
+std::vector<VisibleTreeNode> TaskTree::FlattenAll() const {
+    std::vector<VisibleTreeNode> output;
+    FlattenChildren(rootIds_, "", 0, false, output);
     return output;
 }
 
@@ -289,6 +412,7 @@ void TaskTree::FlattenChildren(
     const std::vector<std::string>& ids,
     const std::string& prefix,
     std::size_t depth,
+    bool respectCollapsed,
     std::vector<VisibleTreeNode>& output
 ) const {
     for (std::size_t i = 0; i < ids.size(); ++i) {
@@ -296,7 +420,14 @@ void TaskTree::FlattenChildren(
         const TaskNode* node = GetNode(ids[i]);
         if (!node) continue;
         output.push_back({node, prefix + (last ? "`- " : "+- "), depth});
-        FlattenChildren(node->children, prefix + (last ? "   " : "|  "), depth + 1, output);
+        if (respectCollapsed && node->kind == NodeKind::Folder && node->collapsed) continue;
+        FlattenChildren(
+            node->children,
+            prefix + (last ? "   " : "|  "),
+            depth + 1,
+            respectCollapsed,
+            output
+        );
     }
 }
 
