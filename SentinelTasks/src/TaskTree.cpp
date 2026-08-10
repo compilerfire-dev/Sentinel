@@ -250,8 +250,6 @@ bool TaskTree::MoveNode(
             return false;
         }
 
-        // Walk upward from the requested parent. If we encounter the node being
-        // moved, the operation would create a cycle in the folder tree.
         std::string ancestor = parentId;
         while (!ancestor.empty()) {
             if (ancestor == id) {
@@ -314,6 +312,25 @@ bool TaskTree::ToggleCollapsed(const std::string& id, std::string& errorMessage)
     }
 
     node->collapsed = !node->collapsed;
+    errorMessage.clear();
+    return true;
+}
+
+bool TaskTree::ExpandAncestors(const std::string& id, std::string& errorMessage) {
+    const TaskNode* node = GetNode(id);
+    if (!node) {
+        errorMessage = "Node ID does not exist: " + id;
+        return false;
+    }
+
+    std::string parent = node->parentId;
+    while (!parent.empty()) {
+        TaskNode* ancestor = GetNode(parent);
+        if (!ancestor) break;
+        if (ancestor->kind == NodeKind::Folder) ancestor->collapsed = false;
+        parent = ancestor->parentId;
+    }
+
     errorMessage.clear();
     return true;
 }
@@ -398,13 +415,13 @@ const TaskNode* TaskTree::GetNode(const std::string& id) const {
 
 std::vector<VisibleTreeNode> TaskTree::Flatten() const {
     std::vector<VisibleTreeNode> output;
-    FlattenChildren(rootIds_, "", 0, true, output);
+    FlattenChildren(rootIds_, "", 0, false, output);
     return output;
 }
 
-std::vector<VisibleTreeNode> TaskTree::FlattenAll() const {
+std::vector<VisibleTreeNode> TaskTree::FlattenVisible() const {
     std::vector<VisibleTreeNode> output;
-    FlattenChildren(rootIds_, "", 0, false, output);
+    FlattenChildren(rootIds_, "", 0, true, output);
     return output;
 }
 
