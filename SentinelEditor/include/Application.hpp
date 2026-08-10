@@ -8,31 +8,42 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 class Application {
 public:
     int Run(int argc, char** argv);
 
 private:
-    enum class Mode {
-        Normal,
-        Insert,
-        Command,
-        Search
+    enum class Mode { Normal, Insert, Command, Search };
+
+    struct EditorSettings {
+        int fontSize{11};
+        bool showLineNumbers{true};
+        bool showTypingMetrics{true};
+        bool vimMode{true};
+    };
+
+    struct Command {
+        std::string id;
+        std::string label;
+        std::string detail;
     };
 
     static void OnActivate(GtkApplication* app, gpointer userData);
-    static gboolean OnTextKeyPress(GtkWidget* widget, GdkEventKey* event, gpointer userData);
-    static gboolean OnCommandEntryKeyPress(GtkWidget* widget, GdkEventKey* event, gpointer userData);
-    static void OnBufferChanged(GtkTextBuffer* buffer, gpointer userData);
-    static void OnOpenClicked(GtkButton* button, gpointer userData);
-    static void OnSaveClicked(GtkButton* button, gpointer userData);
-    static void OnSaveAsClicked(GtkButton* button, gpointer userData);
-    static void OnNewClicked(GtkButton* button, gpointer userData);
-    static gboolean OnWindowDelete(GtkWidget* widget, GdkEvent* event, gpointer userData);
+    static gboolean OnTextKeyPress(GtkWidget*, GdkEventKey* event, gpointer userData);
+    static gboolean OnCommandEntryKeyPress(GtkWidget*, GdkEventKey* event, gpointer userData);
+    static void OnBufferChanged(GtkTextBuffer*, gpointer userData);
+    static gboolean OnWindowDelete(GtkWidget*, GdkEvent*, gpointer userData);
     static gboolean OnRefreshTimer(gpointer userData);
+    static void OnMenuCommand(GtkMenuItem* item, gpointer userData);
+    static void OnPaletteChanged(GtkEditable*, gpointer userData);
+    static void OnPaletteRowActivated(GtkListBox*, GtkListBoxRow* row, gpointer userData);
+    static gboolean OnPaletteKeyPress(GtkWidget*, GdkEventKey* event, gpointer userData);
 
     void BuildWindow(GtkApplication* app);
+    GtkWidget* BuildMenuBar();
+    GtkWidget* AddMenuItem(GtkWidget* menu, const char* label, const char* commandId, guint key = 0, GdkModifierType modifiers = static_cast<GdkModifierType>(0));
 
     gboolean HandleTextKeyPress(GdkEventKey* event);
     gboolean HandleNormalKey(GdkEventKey* event);
@@ -41,6 +52,14 @@ private:
 
     void EnterMode(Mode mode);
     void ExecuteCommand(const std::string& command);
+    void ExecuteAction(const std::string& id);
+
+    void OpenCommandPalette();
+    void RefreshCommandPalette();
+    void ExecuteSelectedPaletteCommand();
+    void ShowSettingsDialog();
+    void ShowHelpDialog();
+    void ApplySettings();
 
     bool LoadFile(const std::filesystem::path& path, bool force);
     bool SaveFile(const std::filesystem::path& path = {});
@@ -66,7 +85,6 @@ private:
     void DeleteLine();
     void OpenLineBelow();
     void OpenLineAbove();
-
     bool FindNext(const std::string& query, bool wrap);
 
     void UpdateStatusBar();
@@ -87,9 +105,16 @@ private:
     GtkWidget* commandPromptLabel_{nullptr};
     GtkWidget* commandEntry_{nullptr};
 
+    GtkWidget* paletteWindow_{nullptr};
+    GtkWidget* paletteEntry_{nullptr};
+    GtkWidget* paletteList_{nullptr};
+    std::vector<std::size_t> paletteResultIndices_;
+
     EditorBuffer editorBuffer_;
     TypingMetrics typingMetrics_;
     LineNumberGutter lineNumberGutter_;
+    EditorSettings settings_;
+    std::vector<Command> commands_;
 
     Mode mode_{Mode::Normal};
     bool pendingDelete_{false};
@@ -99,6 +124,5 @@ private:
     std::filesystem::path initialPath_;
     std::string lastSearch_;
     std::string status_;
-
     guint refreshTimerId_{0};
 };
