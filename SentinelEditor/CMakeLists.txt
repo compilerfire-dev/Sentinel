@@ -2,6 +2,7 @@ add_executable(SentinelEditor
     main.cpp
     src/Application.cpp
     src/EditorBuffer.cpp
+    src/LineNumberGutter.cpp
     src/TypingMetrics.cpp
 )
 
