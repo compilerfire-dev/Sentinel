@@ -16,6 +16,8 @@ private:
     static void OnOpenClicked(GtkButton* button, gpointer userData);
     static void OnReloadClicked(GtkButton* button, gpointer userData);
     static gboolean OnTasksDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
+    static gboolean OnDailyDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
+    static gboolean OnWeeklyDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
     static gboolean OnFragmentsDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
     static gboolean OnLocDraw(GtkWidget* widget, cairo_t* cr, gpointer userData);
 
@@ -24,9 +26,12 @@ private:
     void Reload();
     bool LoadPath(const std::filesystem::path& path);
     void RefreshLabels();
+    void RefreshTaskTable();
     void QueueCharts();
 
     void DrawTaskProgression(GtkWidget* widget, cairo_t* cr) const;
+    void DrawDailyWork(GtkWidget* widget, cairo_t* cr) const;
+    void DrawWeeklyWork(GtkWidget* widget, cairo_t* cr) const;
     void DrawTaskFragments(GtkWidget* widget, cairo_t* cr) const;
     void DrawProjectLoc(GtkWidget* widget, cairo_t* cr) const;
 
@@ -42,6 +47,10 @@ private:
     GtkWidget* fragmentsLabel_{nullptr};
     GtkWidget* projectCountLabel_{nullptr};
     GtkWidget* tasksDrawingArea_{nullptr};
+    GtkWidget* dailyDrawingArea_{nullptr};
+    GtkWidget* weeklyDrawingArea_{nullptr};
     GtkWidget* fragmentsDrawingArea_{nullptr};
     GtkWidget* locDrawingArea_{nullptr};
+    GtkListStore* taskStore_{nullptr};
+    GtkWidget* taskView_{nullptr};
 };
