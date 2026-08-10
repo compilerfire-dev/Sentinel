@@ -93,6 +93,8 @@ Automatic LOC sampling is still not implemented.
 
 SentinelEditor is now a native GTK+ 3 graphical editor. Its central document is a large multiline `GtkTextView` in a scrollable window rather than an ncurses/terminal rendering surface.
 
+A dedicated GTK line-number gutter is displayed to the left of the document. It follows vertical scrolling, dynamically grows with the number of line-number digits, and highlights the line containing the insertion cursor.
+
 It preserves the Vim-inspired mode model:
 
 ```text
