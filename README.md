@@ -5,7 +5,7 @@ Sentinel is a C++20 productivity suite composed of four applications:
 - `Sentinel` — flat ncurses task/timer view.
 - `SentinelTasks` — hierarchical ncurses folder/task planner.
 - `SentinelStats` — GTK 3 + Cairo statistics and timeline visualizer.
-- `SentinelEditor` — Vim-inspired modal ncurses text editor.
+- `SentinelEditor` — GTK+ 3 Vim-inspired modal text editor with a native `GtkTextView` document field.
 
 ## Canonical shared tasks
 
@@ -91,7 +91,18 @@ Automatic LOC sampling is still not implemented.
 
 ## SentinelEditor
 
-SentinelEditor is a separate Vim-inspired ncurses text editor. Its first version includes Normal, Insert, Command, and Search modes, line numbers, vertical/horizontal viewport management, mouse placement/wheel scrolling, and explicit file saving.
+SentinelEditor is now a native GTK+ 3 graphical editor. Its central document is a large multiline `GtkTextView` in a scrollable window rather than an ncurses/terminal rendering surface.
+
+It preserves the Vim-inspired mode model:
+
+```text
+NORMAL
+INSERT
+COMMAND
+SEARCH
+```
+
+Normal mode interprets Vim-style keys while keeping the text field non-editable. Insert mode makes the same GTK text field directly editable, providing native mouse positioning, selection, clipboard behavior, scrolling and Unicode text handling.
 
 Typical controls:
 
@@ -100,27 +111,21 @@ h j k l / arrows    move
 i a I A o O          enter Insert mode
 w b 0 $ gg G         Vim-style movement
 x / dd               delete character / line
-/                    search
+/                    GTK search entry
 n                    repeat search
-:                    Ex-style command mode
+:                    GTK Ex-style command entry
+Ctrl-S               save
 ```
 
-Supported Ex-style commands include:
+The toolbar provides native `New`, `Open`, `Save`, and `Save As` actions. Open/Save As use GTK file chooser dialogs, and unsaved changes are protected by Save / Discard / Cancel dialogs.
+
+The bottom-right status area shows rolling programming-speed metrics:
 
 ```text
-:w
-:w <path>
-:q
-:q!
-:wq
-:e <path>
-:e! <path>
-:new
-:new!
-:help
+LPM 3   LPH 47   CPM30 186
 ```
 
-See `SentinelEditor/README.md` for the complete first-version key map and architecture.
+See `SentinelEditor/README.md` for the complete key map and architecture.
 
 ## Build
 
@@ -151,7 +156,7 @@ Run all tests locally with:
 ctest --test-dir build --output-on-failure
 ```
 
-The test suite includes shared datastore/concurrency tests, shared-task migration and merge tests, SentinelTasks tree manipulation/collapse tests, SentinelStats aggregation tests, and the SentinelEditor text-buffer regression test.
+The test suite includes shared datastore/concurrency tests, shared-task migration and merge tests, SentinelTasks tree manipulation/collapse tests, SentinelStats aggregation tests, and SentinelEditor buffer/typing-metrics tests.
 
 GitHub Actions runs configure, build, and CTest automatically on every push and pull request using `.github/workflows/ci.yml`.
 
