@@ -1,68 +1,36 @@
 # SentinelTasks
 
-SentinelTasks is the hierarchical ncurses companion to Sentinel. Folders provide tree structure, while every task node refers to one globally shared task identity used by both terminal applications and SentinelStats.
+SentinelTasks is the hierarchical ncurses companion to Sentinel. Folders provide tree structure, while every task node refers to one globally shared task identity used by Sentinel, SentinelTasks, and SentinelStats.
 
 ## Shared task model
 
-Tasks exist exactly once under `sharedTasks.tasks` in the active JSON file. SentinelTasks does not persist a second independent timer/completion copy.
+Tasks exist exactly once under `sharedTasks.tasks`. SentinelTasks stores tree-specific metadata around the same global task ID: parent placement and description. Task name, timers, completion state, creation time, colors, and time fragments remain canonical shared-task data.
 
-A task node uses the same global task ID and stores only tree-specific metadata such as parent placement and description:
-
-```json
-{
-  "sharedTasks": {
-    "version": 1,
-    "tasks": [
-      {
-        "id": "opengl",
-        "name": "Study OpenGL",
-        "created_at_epoch": 1786300000,
-        "elapsed_seconds": 3900,
-        "running": false,
-        "completed": false,
-        "completed_at_epoch": 0,
-        "time_fragments": []
-      }
-    ]
-  },
-  "sentinelTasks": {
-    "version": 3,
-    "nodes": [
-      {
-        "id": "graphics",
-        "name": "Graphics",
-        "type": "folder",
-        "parent": ""
-      },
-      {
-        "id": "opengl",
-        "type": "task",
-        "parent": "graphics",
-        "description": "Read and implement rendering examples."
-      }
-    ]
-  }
-}
-```
-
-A task created in Sentinel appears at the SentinelTasks root the next time the dataset is loaded if it has no tree placement yet. A task created in SentinelTasks is written to the same canonical registry and appears in Sentinel on reload.
-
-On the first load of an old pre-shared-task dataset, the old duplicated Sentinel/SentinelTasks task world is deliberately purged and replaced by an empty canonical registry. Sentinel/SentinelTasks settings and `statistics` project history are preserved.
+A task created in Sentinel appears at SentinelTasks root when the dataset is next loaded if it has no placement. A task created in SentinelTasks appears in Sentinel on reload.
 
 ## Tree model
 
-- Folder/category nodes are SentinelTasks-only structural objects.
-- Task nodes are leaves linked by their global task ID.
-- Folders may contain folders and shared tasks.
-- Task names, creation timestamps, timers, completion state, task colors, and time fragments come from the canonical shared task.
-- Descriptions and parent placement belong to SentinelTasks.
-- Folder colors remain local to SentinelTasks.
+- Folders may contain folders and tasks.
+- Tasks are leaves and use their global shared-task IDs.
+- Folder IDs cannot collide with global task IDs.
+- Folder collapse state is persisted in `sentinelTasks.nodes`.
+- `[+]` is a collapsed folder with children.
+- `[-]` is an expanded folder with children.
+- `[F]` is an empty folder.
+- `[T]`, `[>]`, and `[x]` are idle, running, and completed tasks.
+
+Collapse affects only the visible UI projection. Hidden descendants remain in the full tree and are always persisted.
 
 ## Commands
 
 ```text
 addFolder <id> <parent|root> <name>
 addTask <id> <parent|root> <name>
+move <id> <parent|root>
+rename <id> <new name>
+collapse <folder-id>
+expand <folder-id>
+toggle <folder-id>
 remove <id>
 erase <id>
 clear
@@ -90,63 +58,89 @@ list
 quit
 ```
 
-`erase`/`remove` recursively remove a folder and its descendants. Because task identities are shared, erasing a task removes that canonical task from the active task world when the change is saved.
+### Moving nodes
 
-`clear` without arguments deletes every folder and task and does not open a popup. `clear <id>` deletes one node/subtree.
+```text
+move opengl graphics
+move graphics root
+```
 
-`unset` clears completion state and its completion timestamp while preserving accumulated tracked time and time fragments.
+The destination must be `root` or a folder. SentinelTasks rejects self-parenting and moves that would create a cycle by putting a folder inside one of its descendants. Moving into a collapsed folder expands the destination so the moved node remains visible.
+
+### Renaming nodes
+
+```text
+rename opengl "Modern OpenGL"
+rename graphics "Graphics Programming"
+```
+
+`rename` changes the display name, never the ID. Renaming a task therefore updates the canonical shared task name while preserving its global identity and history. Renaming a folder is tree-local.
+
+### Collapsing folders
+
+```text
+collapse graphics
+expand graphics
+toggle graphics
+```
+
+The collapsed state is persisted with the selected JSON dataset. Direct selection or movement automatically expands ancestors when necessary to reveal the selected node.
+
+All five commands also support the ncurses argument popup when entered without arguments.
 
 ## Selection
 
-`manualSelect` immediately enters arrow/mouse selection mode:
+`manualSelect` enters direct tree selection mode:
 
 ```text
 Up / Down    previous / next visible node
 Left         parent
-Right        first child
+Right        expand folder and select first child
 Mouse click  select node
 Mouse wheel  scroll
 Enter / Esc  leave manual mode
 ```
 
-`select` opens the popup node selector. `select <id>` selects directly.
+`select` opens the popup node selector; `select <id>` selects directly and reveals hidden ancestors.
 
 ## Description editor
 
-`setDescription` edits the selected node in the right-hand pane. `F2` saves, `Esc` cancels, and normal cursor/mouse editing is supported. Direct assignment remains available:
+`setDescription` edits the selected node in the right-hand pane. `F2` saves and `Esc` cancels. Direct assignment remains available:
 
 ```text
-setDescription opengl "Read the rendering chapter and implement the examples."
+setDescription opengl "Read and implement the rendering examples."
 ```
 
 ## Task timing
 
-Every `start -> stop` or `start -> done` interval is recorded as its own `time_fragments` entry in the canonical shared task. The accumulated timer remains available as before. SentinelStats uses these fragments to draw the work-session timeline.
+Every continuous `start -> stop` or `start -> done` session is recorded as one `time_fragments` entry in the shared task. `unset` clears completion state without deleting accumulated time or fragments.
 
-## Persistence and JSON selection
+## Persistence
 
-SentinelTasks defaults to `current_data.json` and uses the shared locked + atomic datastore. Its own `sentinelTasks` section stores tree layout/settings, while `sharedTasks.tasks` owns all task state.
+SentinelTasks defaults to `current_data.json` and uses the shared locked + atomic datastore. `sentinelTasks` schema version 4 stores folder hierarchy, descriptions, folder collapse state, display configuration, named colors, and autosave configuration. `sharedTasks.tasks` owns canonical task state.
 
-Open another dataset with:
+Use:
 
 ```text
 setJsonFile
 ```
 
-or directly:
+to open the native file chooser, or:
 
 ```text
 setJsonFile demo/demo_data.json
-setJsonFile "projects/my tasks.json"
 ```
 
-## Build
+to switch directly.
 
-On Debian/Ubuntu/Linux Mint:
+## Build and tests
 
 ```bash
 sudo apt install libncurses-dev libgtk-3-dev pkg-config cmake g++
-cmake -S . -B build
+cmake -S . -B build -DBUILD_TESTING=ON
 cmake --build build
+ctest --test-dir build --output-on-failure
 ./build/bin/SentinelTasks
 ```
+
+`SentinelTasks.TreeModel` tests renaming, moving/reparenting, cycle rejection, collapse visibility, ancestor expansion, and full-tree preservation.
