@@ -237,8 +237,6 @@ bool TaskDataStore::Load(
                 return false;
             }
 
-            // Folders are layout-only and are restored first so task placement
-            // can safely reference any folder parent.
             for (const auto& item : (*layout)["nodes"]) {
                 if (!item.is_object()) continue;
                 const std::string type = item.value("type", std::string{});
@@ -267,6 +265,7 @@ bool TaskDataStore::Load(
 
                 if (TaskNode* node = loadedTree.GetNode(id)) {
                     node->description = item.value("description", std::string{});
+                    node->collapsed = item.value("collapsed", false);
                     const auto createdEpoch = item.value("created_at_epoch", 0LL);
                     if (createdEpoch > 0) {
                         node->createdAt = SentinelShared::TimePointFromEpoch(createdEpoch);
@@ -286,14 +285,10 @@ bool TaskDataStore::Load(
             }
         }
 
-        // Restore explicit tree placement for canonical tasks.
         for (const auto& placement : taskPlacements) {
             const std::string id = placement.value("id", std::string{});
             const auto canonical = canonicalById.find(id);
-            if (canonical == canonicalById.end()) {
-                // Stale placement for a task erased from the shared registry.
-                continue;
-            }
+            if (canonical == canonicalById.end()) continue;
             if (loadedTree.GetNode(id)) {
                 errorMessage = "Duplicate SentinelTasks node/global task ID: " + id;
                 return false;
@@ -315,8 +310,6 @@ bool TaskDataStore::Load(
             }
         }
 
-        // Any task created from Sentinel has no tree placement yet. It appears
-        // at SentinelTasks root automatically with the same global ID.
         for (const auto& id : canonicalOrder) {
             if (loadedTree.GetNode(id)) continue;
             const auto& item = canonicalById.at(id);
@@ -328,7 +321,6 @@ bool TaskDataStore::Load(
             }
         }
 
-        // Canonical task state always wins over tree metadata.
         for (const auto& id : canonicalOrder) {
             TaskNode* node = loadedTree.GetNode(id);
             if (!node || node->kind != NodeKind::Task) {
@@ -364,7 +356,7 @@ bool TaskDataStore::Save(
     std::string& errorMessage
 ) const {
     json layout;
-    layout["version"] = 3;
+    layout["version"] = 4;
     layout["auto_save_seconds"] = std::max<long long>(1, autoSaveInterval.count());
     layout["display"] = {
         {"foreground", ColorToJson(displaySettings.foreground)},
@@ -383,8 +375,6 @@ bool TaskDataStore::Save(
         const TaskNode& node = *visible.node;
 
         if (node.kind == NodeKind::Task) {
-            // Task state lives only in the canonical registry. The tree stores
-            // only placement/description linkage using that same global ID.
             localSharedTasks.push_back(TaskNodeToSharedJson(node));
             layout["nodes"].push_back({
                 {"id", node.id},
@@ -401,6 +391,7 @@ bool TaskDataStore::Save(
             {"description", node.description},
             {"parent", node.parentId},
             {"type", "folder"},
+            {"collapsed", node.collapsed},
             {"created_at_epoch", SentinelShared::EpochSeconds(node.createdAt)}
         };
         if (node.foregroundColor && node.backgroundColor) {
