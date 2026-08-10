@@ -116,6 +116,11 @@ void Application::BuildWindow(GtkApplication* app) {
     GtkWidget* separator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_pack_start(GTK_BOX(root), separator, FALSE, FALSE, 0);
 
+    GtkWidget* editorRow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(editorRow, TRUE);
+    gtk_widget_set_vexpand(editorRow, TRUE);
+    gtk_box_pack_start(GTK_BOX(root), editorRow, TRUE, TRUE, 0);
+
     GtkWidget* scrolled = gtk_scrolled_window_new(nullptr, nullptr);
     gtk_scrolled_window_set_policy(
         GTK_SCROLLED_WINDOW(scrolled),
@@ -136,7 +141,19 @@ void Application::BuildWindow(GtkApplication* app) {
     gtk_text_view_set_accepts_tab(GTK_TEXT_VIEW(textView_), TRUE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(textView_), TRUE);
     gtk_container_add(GTK_CONTAINER(scrolled), textView_);
-    gtk_box_pack_start(GTK_BOX(root), scrolled, TRUE, TRUE, 0);
+
+    lineNumberGutter_.Attach(
+        GTK_TEXT_VIEW(textView_),
+        GTK_SCROLLED_WINDOW(scrolled)
+    );
+    gtk_box_pack_start(
+        GTK_BOX(editorRow),
+        lineNumberGutter_.Widget(),
+        FALSE,
+        FALSE,
+        0
+    );
+    gtk_box_pack_start(GTK_BOX(editorRow), scrolled, TRUE, TRUE, 0);
 
     GtkWidget* statusBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
     gtk_container_set_border_width(GTK_CONTAINER(statusBox), 6);
