@@ -5,6 +5,38 @@
 #include <iterator>
 #include <sstream>
 
+namespace {
+
+std::vector<std::string> SplitTextLines(const std::string& contents) {
+    std::vector<std::string> loaded;
+    std::size_t start = 0;
+
+    while (start <= contents.size()) {
+        const auto newline = contents.find('\n', start);
+        if (newline == std::string::npos) {
+            std::string line = contents.substr(start);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            loaded.push_back(std::move(line));
+            break;
+        }
+
+        std::string line = contents.substr(start, newline - start);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        loaded.push_back(std::move(line));
+        start = newline + 1;
+
+        if (start == contents.size()) {
+            loaded.emplace_back();
+            break;
+        }
+    }
+
+    if (loaded.empty()) loaded.emplace_back();
+    return loaded;
+}
+
+} // namespace
+
 EditorBuffer::EditorBuffer() {
     EnsureNonEmpty();
 }
@@ -45,29 +77,7 @@ bool EditorBuffer::Load(const std::filesystem::path& path, std::string& errorMes
         std::istreambuf_iterator<char>()
     );
 
-    std::vector<std::string> loaded;
-    std::size_t start = 0;
-    while (start <= contents.size()) {
-        const auto newline = contents.find('\n', start);
-        if (newline == std::string::npos) {
-            std::string line = contents.substr(start);
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            loaded.push_back(std::move(line));
-            break;
-        }
-
-        std::string line = contents.substr(start, newline - start);
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        loaded.push_back(std::move(line));
-        start = newline + 1;
-        if (start == contents.size()) {
-            loaded.emplace_back();
-            break;
-        }
-    }
-
-    if (loaded.empty()) loaded.emplace_back();
-    lines_ = std::move(loaded);
+    lines_ = SplitTextLines(contents);
     path_ = path;
     modified_ = false;
     errorMessage.clear();
@@ -76,7 +86,7 @@ bool EditorBuffer::Load(const std::filesystem::path& path, std::string& errorMes
 
 bool EditorBuffer::Save(std::string& errorMessage) {
     if (path_.empty()) {
-        errorMessage = "No file name. Use :w <path>.";
+        errorMessage = "No file name. Use :w <path> or Save As.";
         return false;
     }
     return SaveAs(path_, errorMessage);
@@ -110,6 +120,20 @@ bool EditorBuffer::HasPath() const noexcept {
 
 bool EditorBuffer::Modified() const noexcept {
     return modified_;
+}
+
+std::string EditorBuffer::Text() const {
+    std::ostringstream output;
+    for (std::size_t index = 0; index < lines_.size(); ++index) {
+        if (index > 0) output << '\n';
+        output << lines_[index];
+    }
+    return output.str();
+}
+
+void EditorBuffer::SetText(const std::string& text, bool markModified) {
+    lines_ = SplitTextLines(text);
+    modified_ = markModified;
 }
 
 std::size_t EditorBuffer::LineCount() const noexcept {
