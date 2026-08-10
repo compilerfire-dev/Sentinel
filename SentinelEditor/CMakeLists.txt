@@ -2,6 +2,7 @@ add_executable(SentinelEditor
     main.cpp
     src/Application.cpp
     src/EditorBuffer.cpp
+    src/FuzzySearch.cpp
     src/LineNumberGutter.cpp
     src/TypingMetrics.cpp
 )
@@ -48,4 +49,18 @@ if(BUILD_TESTING)
         -Wpedantic
     )
     add_test(NAME SentinelEditor.TypingMetrics COMMAND SentinelEditorTypingMetricsTest)
+
+    add_executable(SentinelEditorFuzzySearchTest
+        tests/FuzzySearchTest.cpp
+        src/FuzzySearch.cpp
+    )
+    target_include_directories(SentinelEditorFuzzySearchTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_options(SentinelEditorFuzzySearchTest PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    add_test(NAME SentinelEditor.FuzzySearch COMMAND SentinelEditorFuzzySearchTest)
 endif()
