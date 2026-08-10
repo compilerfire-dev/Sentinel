@@ -7,11 +7,10 @@ add_executable(SentinelEditor
 
 target_include_directories(SentinelEditor PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CURSES_INCLUDE_DIRS}
 )
 
 target_link_libraries(SentinelEditor PRIVATE
-    ${CURSES_LIBRARIES}
+    PkgConfig::GTK3
 )
 
 target_compile_options(SentinelEditor PRIVATE
