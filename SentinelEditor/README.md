@@ -1,6 +1,6 @@
 # SentinelEditor
 
-SentinelEditor is a Vim-inspired terminal text editor written in C++20 with ncurses. It is intentionally a smaller modal editor rather than a full Vim clone, with the source split into a testable text buffer, rolling typing metrics, and an ncurses application layer.
+SentinelEditor is a Vim-inspired graphical text editor written in C++20 with GTK+ 3. The document is edited in a native multiline `GtkTextView` inside a scrollable GTK window; it is not a terminal emulator and no ncurses rendering is used by SentinelEditor anymore.
 
 ## Run
 
@@ -12,9 +12,30 @@ SentinelEditor is a Vim-inspired terminal text editor written in C++20 with ncur
 
 Opening a path that does not exist creates an empty named buffer. The file is created only when it is written.
 
+## GTK layout
+
+The main window contains:
+
+```text
+New | Open | Save | Save As                         SentinelEditor
+------------------------------------------------------------------
+
+                  GtkTextView document
+              native multiline text field
+                 native GTK scrolling
+                  mouse + selection
+                  clipboard support
+
+------------------------------------------------------------------
+NORMAL  main.cpp [+]  14:8              LPM 3  LPH 47  CPM30 186
+: command/search entry (shown only when needed)
+```
+
+The large central `GtkTextView` is the actual editor. GTK owns text layout, scrolling, mouse positioning, selection, clipboard behavior and UTF-8 text representation.
+
 ## Modes
 
-SentinelEditor currently provides four modes:
+SentinelEditor preserves four Vim-inspired modes:
 
 ```text
 NORMAL
@@ -23,7 +44,7 @@ COMMAND
 SEARCH
 ```
 
-`Esc` returns to Normal mode from Insert, Command, or Search mode.
+In `NORMAL` mode the main `GtkTextView` is non-editable and key presses are interpreted as Vim-like commands. In `INSERT` mode the exact same `GtkTextView` becomes directly editable, so normal GTK text-input behavior is available. `Esc` returns to Normal mode.
 
 ## Normal mode
 
@@ -38,17 +59,17 @@ w               next word
 b               previous word
 0 / Home        beginning of line
 $ / End         end of line
-gg              first line
-G               last line
-Ctrl-B / PgUp   page upward
-Ctrl-F / PgDn   page downward
+gg              first position in document
+G               end of document
+Ctrl-B / PgUp   move upward by a page-sized step
+Ctrl-F / PgDn   move downward by a page-sized step
 ```
 
 Editing:
 
 ```text
-i       insert at cursor
-a       insert after cursor
+i       enter Insert mode at cursor
+a       enter Insert mode after cursor
 I       insert at beginning of line
 A       insert at end of line
 o       create line below and insert
@@ -60,51 +81,49 @@ dd      delete current line
 Search and commands:
 
 ```text
-/       search forward
+/       open the GTK search entry
 n       repeat previous search
-:       enter Ex-style command mode
+:       open the GTK Ex-style command entry
 ```
 
-The mouse can place the cursor in the text area. The mouse wheel scrolls vertically.
+`Ctrl-S` saves from Normal or Insert mode.
 
 ## Insert mode
 
-Insert mode supports ordinary text entry plus:
+Insert mode uses GTK's native text editing. Ordinary text entry, Unicode text, mouse placement, selection, clipboard shortcuts, scrolling, Enter, Backspace, Delete, Home/End and arrow keys are handled by the `GtkTextView`.
 
-```text
-Arrow keys
-Home / End
-Enter
-Backspace
-Delete
-Esc
-```
-
-Backspace at column zero joins the current line to the previous line. Delete at end-of-line joins the following line.
+The editor records direct keyboard character/new-line events for its programming-speed metrics. Clipboard pastes are intentionally not treated as typing speed.
 
 ## Programming speed metrics
 
-The bottom-right side of the reverse-video status line continuously shows rolling typing statistics:
+The bottom-right status area continuously shows:
 
 ```text
-LPM 3 | LPH 47 | CPM30 186
+LPM 3   LPH 47   CPM30 186
 ```
 
-The values mean:
+- `LPM` — new-line creation events during the most recent 60 seconds.
+- `LPH` — new-line creation events during the most recent 60 minutes.
+- `CPM30` — direct character key presses during the most recent 30 seconds, normalized to characters per minute.
 
-- `LPM` — number of new-line creation events during the most recent 60 seconds.
-- `LPH` — number of new-line creation events during the most recent 60 minutes.
-- `CPM30` — character insertions observed during the most recent 30 seconds, normalized to characters per minute. For example, 93 inserted characters in 30 seconds displays as `CPM30 186`.
+A line event is recorded for Enter in Insert mode and for Vim-style `o` / `O`. The rolling display refreshes every 200 ms, so values fall naturally when events leave their time windows.
 
-A line event is recorded when a new line is created with `Enter`, `o`, or `O`. Deleting or joining lines does not reduce the counters, because these metrics describe gross typing/output activity rather than net file growth.
+## Native file controls
 
-Only characters successfully inserted into the edited text are counted. Navigation, command-mode typing, search queries, deletions, and mouse activity do not increase `CPM30`.
+The toolbar provides:
 
-The metrics are session-wide across files opened within the same SentinelEditor process. They use `std::chrono::steady_clock` and rolling windows, and the ncurses UI refreshes periodically so the displayed rates naturally fall as old events leave their windows even while no key is pressed.
+```text
+New
+Open
+Save
+Save As
+```
+
+`Open` and `Save As` use native GTK file chooser dialogs. Closing the window or opening another file while the document is modified presents a GTK Save / Discard / Cancel warning.
 
 ## Command mode
 
-Supported commands:
+Press `:` to reveal the command entry. Supported commands are:
 
 ```text
 :w
@@ -121,7 +140,7 @@ Supported commands:
 :help
 ```
 
-`:q` and `:e` protect unsaved modifications. Their `!` variants deliberately discard them.
+`:q` and `:e` protect unsaved modifications. Their `!` forms deliberately discard them.
 
 Paths containing spaces can be quoted:
 
@@ -132,11 +151,7 @@ Paths containing spaces can be quoted:
 
 ## Search
 
-Press `/`, type a literal search string, and press Enter. `n` searches for the next occurrence and wraps to the beginning of the file.
-
-## Layout
-
-The editor renders line numbers on the left, a Vim-style reverse-video status line near the bottom, and a command/message line at the bottom. The right side of the status line is reserved for the live programming-speed metrics when the terminal is wide enough.
+Press `/` to reveal the GTK search entry, type a literal string, and press Enter. The matching range is selected in the main text field and scrolled into view. `n` searches for the next occurrence and wraps to the beginning.
 
 ## Source layout
 
@@ -157,37 +172,35 @@ SentinelEditor/
     └── TypingMetricsTest.cpp
 ```
 
-`EditorBuffer` owns text storage, file loading/saving, line splitting/joining, insertion and deletion. `TypingMetrics` owns the rolling 30-second, 60-second, and 60-minute activity windows. `Application` owns ncurses rendering, modes, key bindings, cursor state, scrolling, searching, Ex-style commands, and reporting successful edit events to the metrics model.
-
-## Current limitations / natural next features
-
-The first version deliberately does not attempt to implement every Vim subsystem. Useful future additions include:
-
-```text
-undo / redo
-visual selection
-yank / paste registers
-syntax highlighting
-configurable tab width
-UTF-8 code-point-aware cursor movement
-regex search and replacement
-multiple buffers / tabs
-split windows
-marks
-macros
-command history
-swap/recovery files
-```
+`Application` owns the GTK window, `GtkTextView`, Vim-inspired mode controller, native dialogs, search/command entries, status bar and key dispatch. `EditorBuffer` remains the file-storage model and can synchronize complete GTK text through `Text()` / `SetText()`. `TypingMetrics` owns the rolling activity windows.
 
 ## Build
 
-From the repository root:
+SentinelEditor now links GTK3 rather than ncurses. From the repository root:
 
 ```bash
+sudo apt install build-essential cmake pkg-config libgtk-3-dev libncurses-dev
 cmake -S . -B build -DBUILD_TESTING=ON
 cmake --build build
 ./build/bin/SentinelEditor
 ctest --test-dir build --output-on-failure
 ```
 
-The CTest suite includes both `SentinelEditor.Buffer` and `SentinelEditor.TypingMetrics`.
+The CTest suite includes `SentinelEditor.Buffer` and `SentinelEditor.TypingMetrics`. The workspace still needs ncurses because Sentinel and SentinelTasks remain terminal applications.
+
+## Natural next features
+
+Useful next editor-specific additions include:
+
+```text
+syntax highlighting
+undo / redo history
+visual mode
+yank / paste registers
+line-number gutter
+multiple tabs / buffers
+split editor panes
+regex search and replace
+project/file sidebar
+configurable fonts and tab width
+```
