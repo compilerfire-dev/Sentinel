@@ -2,6 +2,7 @@ add_executable(SentinelEditor
     main.cpp
     src/Application.cpp
     src/EditorBuffer.cpp
+    src/TypingMetrics.cpp
 )
 
 target_include_directories(SentinelEditor PRIVATE
@@ -33,4 +34,18 @@ if(BUILD_TESTING)
         -Wpedantic
     )
     add_test(NAME SentinelEditor.Buffer COMMAND SentinelEditorBufferTest)
+
+    add_executable(SentinelEditorTypingMetricsTest
+        tests/TypingMetricsTest.cpp
+        src/TypingMetrics.cpp
+    )
+    target_include_directories(SentinelEditorTypingMetricsTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_options(SentinelEditorTypingMetricsTest PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    add_test(NAME SentinelEditor.TypingMetrics COMMAND SentinelEditorTypingMetricsTest)
 endif()
