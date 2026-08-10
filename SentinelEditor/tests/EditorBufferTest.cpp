@@ -20,6 +20,13 @@ int main() {
         return Fail("new buffer should contain one empty line");
     }
 
+    buffer.SetText("Hello\nWorld\n", true);
+    if (!buffer.Modified()) return Fail("SetText should mark the buffer modified");
+    if (buffer.LineCount() != 3 || buffer.Text() != "Hello\nWorld\n") {
+        return Fail("SetText/Text did not preserve multiline GTK text");
+    }
+
+    buffer.NewEmpty();
     const std::string hello = "Hello";
     for (std::size_t index = 0; index < hello.size(); ++index) {
         if (!buffer.InsertCharacter(0, index, hello[index])) {
@@ -63,7 +70,7 @@ int main() {
 
     EditorBuffer loaded;
     if (!loaded.Load(path, error)) return Fail(error);
-    if (loaded.LineCount() != 1 || loaded.Line(0) != "HelloWorld") {
+    if (loaded.LineCount() != 1 || loaded.Line(0) != "HelloWorld" || loaded.Text() != "HelloWorld") {
         return Fail("saved buffer did not load back correctly");
     }
 
