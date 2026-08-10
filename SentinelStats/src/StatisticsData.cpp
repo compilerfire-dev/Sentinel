@@ -5,6 +5,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <ctime>
+#include <map>
 
 using nlohmann::json;
 
@@ -29,12 +31,18 @@ std::uint64_t ReadElapsedSeconds(const json& item) {
     return ReadNonNegativeInteger(item["elapsed_seconds"]);
 }
 
-void ReadTaskFragments(
+std::int64_t CompletionEpoch(const json& item) {
+    if (item.contains("completed_at_epoch")) return ReadEpoch(item["completed_at_epoch"]);
+    if (item.contains("completion_epoch")) return ReadEpoch(item["completion_epoch"]);
+    return 0;
+}
+
+std::size_t ReadTaskFragments(
     const json& item,
     const std::string& source,
     StatisticsSnapshot& snapshot
 ) {
-    if (!item.contains("time_fragments") || !item["time_fragments"].is_array()) return;
+    if (!item.contains("time_fragments") || !item["time_fragments"].is_array()) return 0;
 
     TaskFragmentSeries series;
     series.id = item.value("id", std::string{});
@@ -82,7 +90,50 @@ void ReadTaskFragments(
         return left.startedAtEpoch < right.startedAtEpoch;
     });
 
+    const std::size_t count = series.fragments.size();
     if (!series.fragments.empty()) snapshot.taskFragments.push_back(std::move(series));
+    return count;
+}
+
+void AccumulateTaskObject(
+    const json& task,
+    const std::string& source,
+    StatisticsSnapshot& snapshot,
+    std::vector<std::int64_t>& creationTimes,
+    std::vector<std::int64_t>& completionTimes
+) {
+    if (!task.is_object()) return;
+
+    ++snapshot.totalTasks;
+
+    const bool completed = task.value("completed", false);
+    const bool running = task.value("running", false);
+    const auto tracked = ReadElapsedSeconds(task);
+    if (completed) ++snapshot.completedTasks;
+    if (running) ++snapshot.runningTasks;
+    snapshot.totalTrackedSeconds += tracked;
+
+    std::int64_t createdEpoch = 0;
+    if (task.contains("created_at_epoch")) {
+        createdEpoch = ReadEpoch(task["created_at_epoch"]);
+        if (createdEpoch > 0) creationTimes.push_back(createdEpoch);
+    }
+
+    const std::int64_t completedEpoch = completed ? CompletionEpoch(task) : 0;
+    if (completedEpoch > 0) completionTimes.push_back(completedEpoch);
+
+    const std::size_t fragmentCount = ReadTaskFragments(task, source, snapshot);
+
+    TaskAnalytics analytics;
+    analytics.id = task.value("id", std::string{});
+    analytics.name = task.value("name", analytics.id);
+    analytics.createdAtEpoch = createdEpoch;
+    analytics.completedAtEpoch = completedEpoch;
+    analytics.trackedSeconds = tracked;
+    analytics.fragmentCount = fragmentCount;
+    analytics.running = running;
+    analytics.completed = completed;
+    snapshot.taskAnalytics.push_back(std::move(analytics));
 }
 
 void AccumulateTaskArray(
@@ -93,30 +144,14 @@ void AccumulateTaskArray(
     std::vector<std::int64_t>& completionTimes
 ) {
     if (!tasks.is_array()) return;
-
     for (const auto& task : tasks) {
-        if (!task.is_object()) continue;
-        ++snapshot.totalTasks;
-
-        const bool completed = task.value("completed", false);
-        const bool running = task.value("running", false);
-        if (completed) ++snapshot.completedTasks;
-        if (running) ++snapshot.runningTasks;
-        snapshot.totalTrackedSeconds += ReadElapsedSeconds(task);
-
-        if (task.contains("created_at_epoch")) {
-            const auto epoch = ReadEpoch(task["created_at_epoch"]);
-            if (epoch > 0) creationTimes.push_back(epoch);
-        }
-
-        if (completed) {
-            std::int64_t epoch = 0;
-            if (task.contains("completed_at_epoch")) epoch = ReadEpoch(task["completed_at_epoch"]);
-            else if (task.contains("completion_epoch")) epoch = ReadEpoch(task["completion_epoch"]);
-            if (epoch > 0) completionTimes.push_back(epoch);
-        }
-
-        ReadTaskFragments(task, source, snapshot);
+        AccumulateTaskObject(
+            task,
+            source,
+            snapshot,
+            creationTimes,
+            completionTimes
+        );
     }
 }
 
@@ -132,27 +167,13 @@ void AccumulateTreeNodes(
         if (!node.is_object()) continue;
         const std::string type = node.value("type", node.value("kind", std::string{}));
         if (type == "folder" || type == "Folder") continue;
-
-        ++snapshot.totalTasks;
-        const bool completed = node.value("completed", false);
-        const bool running = node.value("running", false);
-        if (completed) ++snapshot.completedTasks;
-        if (running) ++snapshot.runningTasks;
-        snapshot.totalTrackedSeconds += ReadElapsedSeconds(node);
-
-        if (node.contains("created_at_epoch")) {
-            const auto epoch = ReadEpoch(node["created_at_epoch"]);
-            if (epoch > 0) creationTimes.push_back(epoch);
-        }
-
-        if (completed) {
-            std::int64_t epoch = 0;
-            if (node.contains("completed_at_epoch")) epoch = ReadEpoch(node["completed_at_epoch"]);
-            else if (node.contains("completion_epoch")) epoch = ReadEpoch(node["completion_epoch"]);
-            if (epoch > 0) completionTimes.push_back(epoch);
-        }
-
-        ReadTaskFragments(node, "SentinelTasks", snapshot);
+        AccumulateTaskObject(
+            node,
+            "SentinelTasks",
+            snapshot,
+            creationTimes,
+            completionTimes
+        );
     }
 }
 
@@ -166,6 +187,111 @@ std::vector<TimePointValue> BuildCumulativeHistory(std::vector<std::int64_t> epo
         result.push_back({epoch, static_cast<double>(cumulative)});
     }
     return result;
+}
+
+bool LocalTime(std::int64_t epoch, std::tm& local) {
+    const std::time_t raw = static_cast<std::time_t>(epoch);
+#ifdef _WIN32
+    return localtime_s(&local, &raw) == 0;
+#else
+    return localtime_r(&raw, &local) != nullptr;
+#endif
+}
+
+std::int64_t LocalDayStart(std::int64_t epoch) {
+    std::tm local{};
+    if (!LocalTime(epoch, local)) return epoch;
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;
+    const std::time_t result = std::mktime(&local);
+    return result == static_cast<std::time_t>(-1)
+        ? epoch
+        : static_cast<std::int64_t>(result);
+}
+
+std::int64_t NextLocalDay(std::int64_t dayStart) {
+    std::tm local{};
+    if (!LocalTime(dayStart, local)) return dayStart + 86400;
+    local.tm_mday += 1;
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;
+    const std::time_t result = std::mktime(&local);
+    return result == static_cast<std::time_t>(-1)
+        ? dayStart + 86400
+        : static_cast<std::int64_t>(result);
+}
+
+std::int64_t LocalWeekStart(std::int64_t epoch) {
+    const std::int64_t dayStart = LocalDayStart(epoch);
+    std::tm local{};
+    if (!LocalTime(dayStart, local)) return dayStart;
+
+    // tm_wday: Sunday=0. Convert to days since Monday.
+    const int daysSinceMonday = (local.tm_wday + 6) % 7;
+    local.tm_mday -= daysSinceMonday;
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    local.tm_isdst = -1;
+    const std::time_t result = std::mktime(&local);
+    return result == static_cast<std::time_t>(-1)
+        ? dayStart - static_cast<std::int64_t>(daysSinceMonday) * 86400
+        : static_cast<std::int64_t>(result);
+}
+
+void BuildPeriodWork(StatisticsSnapshot& snapshot) {
+    std::map<std::int64_t, PeriodWork> daily;
+
+    for (const auto& task : snapshot.taskFragments) {
+        for (const auto& fragment : task.fragments) {
+            std::int64_t cursor = fragment.startedAtEpoch;
+            const std::int64_t end = fragment.endedAtEpoch;
+            if (cursor <= 0 || end <= cursor) continue;
+
+            while (cursor < end) {
+                const std::int64_t dayStart = LocalDayStart(cursor);
+                const std::int64_t nextDay = std::max(
+                    dayStart + 1,
+                    NextLocalDay(dayStart)
+                );
+                const std::int64_t sliceEnd = std::min(end, nextDay);
+                if (sliceEnd <= cursor) break;
+
+                auto& period = daily[dayStart];
+                period.periodStartEpoch = dayStart;
+                period.trackedSeconds += static_cast<std::uint64_t>(sliceEnd - cursor);
+                ++period.fragmentSlices;
+                cursor = sliceEnd;
+            }
+        }
+    }
+
+    snapshot.dailyWork.clear();
+    snapshot.dailyWork.reserve(daily.size());
+    for (const auto& [epoch, period] : daily) {
+        (void)epoch;
+        snapshot.dailyWork.push_back(period);
+    }
+
+    std::map<std::int64_t, PeriodWork> weekly;
+    for (const auto& day : snapshot.dailyWork) {
+        const std::int64_t weekStart = LocalWeekStart(day.periodStartEpoch);
+        auto& week = weekly[weekStart];
+        week.periodStartEpoch = weekStart;
+        week.trackedSeconds += day.trackedSeconds;
+        week.fragmentSlices += day.fragmentSlices;
+    }
+
+    snapshot.weeklyWork.clear();
+    snapshot.weeklyWork.reserve(weekly.size());
+    for (const auto& [epoch, period] : weekly) {
+        (void)epoch;
+        snapshot.weeklyWork.push_back(period);
+    }
 }
 
 void ReadProjects(const json& root, StatisticsSnapshot& snapshot) {
@@ -232,7 +358,6 @@ bool StatisticsData::Load(const std::filesystem::path& path, std::string& errorM
         root["sharedTasks"]["tasks"].is_array();
 
     if (hasCanonicalSharedTasks) {
-        // New shared identity model: each logical task exists exactly once.
         AccumulateTaskArray(
             root["sharedTasks"]["tasks"],
             "Shared",
@@ -241,8 +366,6 @@ bool StatisticsData::Load(const std::filesystem::path& path, std::string& errorM
             completionTimes
         );
     } else {
-        // Read-only compatibility for old JSON files that have not yet been
-        // opened by Sentinel/SentinelTasks and therefore have not been purged.
         if (root.contains("sentinel") && root["sentinel"].is_object() &&
             root["sentinel"].contains("tasks")) {
             AccumulateTaskArray(
@@ -282,6 +405,14 @@ bool StatisticsData::Load(const std::filesystem::path& path, std::string& errorM
         return left.fragments.front().startedAtEpoch < right.fragments.front().startedAtEpoch;
     });
 
+    std::sort(next.taskAnalytics.begin(), next.taskAnalytics.end(), [](const auto& left, const auto& right) {
+        if (left.trackedSeconds != right.trackedSeconds) {
+            return left.trackedSeconds > right.trackedSeconds;
+        }
+        return left.name < right.name;
+    });
+
+    BuildPeriodWork(next);
     ReadProjects(root, next);
 
     snapshot_ = std::move(next);
