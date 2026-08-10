@@ -24,7 +24,7 @@ bool HasCtrlShift(GdkEventKey* event, guint key) {
 int Application::Run(int argc, char** argv) {
     if (argc > 1 && argv[1] && *argv[1]) initialPath_ = argv[1];
 
-    app_ = gtk_application_new("dev.compilerfire.sentinel.editor", G_APPLICATION_FLAGS_NONE);
+    app_ = gtk_application_new("dev.compilerfire.sentinel.editor", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app_, "activate", G_CALLBACK(OnActivate), this);
 
     char* gtkArgv[] = {
@@ -468,7 +468,18 @@ void Application::ExecuteSelectedPaletteCommand() {
 }
 
 void Application::ShowSettingsDialog() {
-    GtkWidget* dialog = gtk_dialog_new_with_buttons("SentinelEditor Settings", GTK_WINDOW(window_), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Cancel", GTK_RESPONSE_CANCEL, "Apply", GTK_RESPONSE_APPLY, "OK", GTK_RESPONSE_OK, nullptr);
+    const auto dialogFlags = static_cast<GtkDialogFlags>(
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT
+    );
+    GtkWidget* dialog = gtk_dialog_new_with_buttons(
+        "SentinelEditor Settings",
+        GTK_WINDOW(window_),
+        dialogFlags,
+        "Cancel", GTK_RESPONSE_CANCEL,
+        "Apply", GTK_RESPONSE_APPLY,
+        "OK", GTK_RESPONSE_OK,
+        nullptr
+    );
     gtk_window_set_default_size(GTK_WINDOW(dialog), 480, 320);
     GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
     GtkWidget* grid = gtk_grid_new();
