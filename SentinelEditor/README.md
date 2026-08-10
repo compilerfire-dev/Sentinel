@@ -1,6 +1,6 @@
 # SentinelEditor
 
-SentinelEditor is a Vim-inspired terminal text editor written in C++20 with ncurses. It is intentionally a smaller modal editor rather than a full Vim clone, with the source split into a testable text buffer and an ncurses application layer.
+SentinelEditor is a Vim-inspired terminal text editor written in C++20 with ncurses. It is intentionally a smaller modal editor rather than a full Vim clone, with the source split into a testable text buffer, rolling typing metrics, and an ncurses application layer.
 
 ## Run
 
@@ -82,6 +82,26 @@ Esc
 
 Backspace at column zero joins the current line to the previous line. Delete at end-of-line joins the following line.
 
+## Programming speed metrics
+
+The bottom-right side of the reverse-video status line continuously shows rolling typing statistics:
+
+```text
+LPM 3 | LPH 47 | CPM30 186
+```
+
+The values mean:
+
+- `LPM` — number of new-line creation events during the most recent 60 seconds.
+- `LPH` — number of new-line creation events during the most recent 60 minutes.
+- `CPM30` — character insertions observed during the most recent 30 seconds, normalized to characters per minute. For example, 93 inserted characters in 30 seconds displays as `CPM30 186`.
+
+A line event is recorded when a new line is created with `Enter`, `o`, or `O`. Deleting or joining lines does not reduce the counters, because these metrics describe gross typing/output activity rather than net file growth.
+
+Only characters successfully inserted into the edited text are counted. Navigation, command-mode typing, search queries, deletions, and mouse activity do not increase `CPM30`.
+
+The metrics are session-wide across files opened within the same SentinelEditor process. They use `std::chrono::steady_clock` and rolling windows, and the ncurses UI refreshes periodically so the displayed rates naturally fall as old events leave their windows even while no key is pressed.
+
 ## Command mode
 
 Supported commands:
@@ -116,7 +136,7 @@ Press `/`, type a literal search string, and press Enter. `n` searches for the n
 
 ## Layout
 
-The editor renders line numbers on the left, a Vim-style reverse-video status line near the bottom, and a command/message line at the bottom.
+The editor renders line numbers on the left, a Vim-style reverse-video status line near the bottom, and a command/message line at the bottom. The right side of the status line is reserved for the live programming-speed metrics when the terminal is wide enough.
 
 ## Source layout
 
@@ -126,15 +146,18 @@ SentinelEditor/
 ├── main.cpp
 ├── include/
 │   ├── Application.hpp
-│   └── EditorBuffer.hpp
+│   ├── EditorBuffer.hpp
+│   └── TypingMetrics.hpp
 ├── src/
 │   ├── Application.cpp
-│   └── EditorBuffer.cpp
+│   ├── EditorBuffer.cpp
+│   └── TypingMetrics.cpp
 └── tests/
-    └── EditorBufferTest.cpp
+    ├── EditorBufferTest.cpp
+    └── TypingMetricsTest.cpp
 ```
 
-`EditorBuffer` owns text storage, file loading/saving, line splitting/joining, insertion and deletion. `Application` owns ncurses rendering, modes, key bindings, cursor state, scrolling, searching, and Ex-style commands.
+`EditorBuffer` owns text storage, file loading/saving, line splitting/joining, insertion and deletion. `TypingMetrics` owns the rolling 30-second, 60-second, and 60-minute activity windows. `Application` owns ncurses rendering, modes, key bindings, cursor state, scrolling, searching, Ex-style commands, and reporting successful edit events to the metrics model.
 
 ## Current limitations / natural next features
 
@@ -166,3 +189,5 @@ cmake --build build
 ./build/bin/SentinelEditor
 ctest --test-dir build --output-on-failure
 ```
+
+The CTest suite includes both `SentinelEditor.Buffer` and `SentinelEditor.TypingMetrics`.
