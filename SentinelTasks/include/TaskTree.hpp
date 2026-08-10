@@ -26,6 +26,7 @@ struct TaskNode {
     std::vector<std::string> children;
     std::optional<RgbColor> foregroundColor;
     std::optional<RgbColor> backgroundColor;
+    bool collapsed{false};
 
     std::chrono::seconds accumulatedTime{0};
     bool running{false};
@@ -71,6 +72,10 @@ public:
     );
 
     bool RemoveNode(const std::string& id, std::string& errorMessage);
+    bool RenameNode(const std::string& id, std::string name, std::string& errorMessage);
+    bool MoveNode(const std::string& id, std::string parentId, std::string& errorMessage);
+    bool SetCollapsed(const std::string& id, bool collapsed, std::string& errorMessage);
+    bool ToggleCollapsed(const std::string& id, std::string& errorMessage);
     bool SetDescription(const std::string& id, std::string description, std::string& errorMessage);
     bool SetColor(const std::string& id, RgbColor foreground, RgbColor background, std::string& errorMessage);
     void ClearColor(const std::string& id);
@@ -83,7 +88,10 @@ public:
     TaskNode* GetNode(const std::string& id);
     const TaskNode* GetNode(const std::string& id) const;
 
+    // Flatten() is the visible UI projection and respects collapsed folders.
+    // FlattenAll() always includes every descendant and is used for persistence.
     std::vector<VisibleTreeNode> Flatten() const;
+    std::vector<VisibleTreeNode> FlattenAll() const;
     std::optional<std::string> ParentOf(const std::string& id) const;
     std::optional<std::string> FirstChildOf(const std::string& id) const;
     bool Empty() const noexcept;
@@ -93,6 +101,7 @@ private:
         const std::vector<std::string>& ids,
         const std::string& prefix,
         std::size_t depth,
+        bool respectCollapsed,
         std::vector<VisibleTreeNode>& output
     ) const;
     void CollectSubtreeIds(const std::string& id, std::vector<std::string>& output) const;
