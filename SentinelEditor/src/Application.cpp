@@ -51,6 +51,7 @@ int Application::Run(int argc, char** argv) {
     noecho();
     keypad(stdscr, TRUE);
     mousemask(ALL_MOUSE_EVENTS, nullptr);
+    timeout(200);
     curs_set(1);
 
     while (running_) {
@@ -63,6 +64,8 @@ int Application::Run(int argc, char** argv) {
 }
 
 void Application::HandleInput(int key) {
+    if (key == ERR) return;
+
     if (key == KEY_MOUSE) {
         HandleMouse();
         return;
@@ -178,6 +181,7 @@ void Application::HandleNormalInput(int key) {
             break;
         case 'o':
             if (buffer_.InsertBlankLineAfter(cursorRow_)) {
+                typingMetrics_.RecordLine();
                 ++cursorRow_;
                 cursorColumn_ = 0;
                 preferredColumn_ = 0;
@@ -186,6 +190,7 @@ void Application::HandleNormalInput(int key) {
             break;
         case 'O':
             if (buffer_.InsertBlankLineBefore(cursorRow_)) {
+                typingMetrics_.RecordLine();
                 cursorColumn_ = 0;
                 preferredColumn_ = 0;
                 EnterInsertMode();
@@ -252,6 +257,7 @@ void Application::HandleInsertInput(int key) {
 
     if (key == '\n' || key == KEY_ENTER) {
         if (buffer_.SplitLine(cursorRow_, cursorColumn_)) {
+            typingMetrics_.RecordLine();
             ++cursorRow_;
             cursorColumn_ = 0;
             preferredColumn_ = 0;
@@ -275,6 +281,7 @@ void Application::HandleInsertInput(int key) {
 
     if (key >= 32 && key <= 255) {
         if (buffer_.InsertCharacter(cursorRow_, cursorColumn_, static_cast<char>(key))) {
+            typingMetrics_.RecordCharacter();
             ++cursorColumn_;
             preferredColumn_ = cursorColumn_;
         }
@@ -690,8 +697,26 @@ void Application::RenderStatusLine(int row, int width) {
     status << "   " << (cursorRow_ + 1) << ":" << (cursorColumn_ + 1)
            << "   " << buffer_.LineCount() << " lines";
 
-    const std::string value = status.str();
-    mvaddnstr(row, 0, value.c_str(), width);
+    const auto metrics = typingMetrics_.GetSnapshot();
+    std::ostringstream speed;
+    speed << "LPM " << metrics.linesLastMinute
+          << " | LPH " << metrics.linesLastHour
+          << " | CPM30 " << static_cast<unsigned long long>(
+                 metrics.charactersPerMinute30Seconds + 0.5
+             );
+
+    const std::string left = status.str();
+    const std::string right = speed.str();
+    const int rightWidth = static_cast<int>(right.size());
+
+    if (rightWidth >= width) {
+        mvaddnstr(row, 0, right.c_str(), width);
+    } else {
+        const int leftWidth = std::max(0, width - rightWidth - 1);
+        if (leftWidth > 0) mvaddnstr(row, 0, left.c_str(), leftWidth);
+        mvaddnstr(row, width - rightWidth, right.c_str(), rightWidth);
+    }
+
     attroff(A_REVERSE);
 }
 
