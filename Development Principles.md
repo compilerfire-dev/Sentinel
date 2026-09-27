@@ -6,6 +6,8 @@ Self-Authoritative, or even Self-authoritarian principles of development.
  - use sentinel_ prefix if defining function, or function-alike symbol (like macro), and in general, use sentinel label to describe everything that sentinel program **owns.** (the broadly defined responsibility)
  - in data, sentinel namespace is where globals, constants, and other extern (in headers) symbols go.
  - *Try to align to programming principles similar to programming linux* (Research it)
+ - Use as minimal and concise solutions as possible.
+ - If algorithm is complicated, write description (in comment) describing what it does. (plausibly later on develop documentation)
 
 ## Work Principles
  - Work intensively, and don't lose sight of the major objective. Focus on spending long hours in order to complete the software project. 
@@ -17,3 +19,6 @@ Self-Authoritative, or even Self-authoritarian principles of development.
  - **Do not use AI for the automation themselves**, develop Sentinel as an independent program for the training (deliberate practice)
 
  - Overall, code the program in itself as much by oneself as possible.
+
+## Other
+ - Possibly when the program is going to be developed sophistically enough, we will develop the guideliner around the source code itself, decompositing it into each element, so it will be easier to develop later on.
