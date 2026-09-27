@@ -28,3 +28,4 @@ I don't want to write this application using AI, and I don't want to write my ot
 In the future I'm planning to develop this application around other libraries. Right now I'm planning to develop this application as sort of a System-IDE within the Open-GL Context. I'm outsourcing and developing simultaneously both versions, and they are available organized in the commits and versions you will find in this github repository. The future version is labeled "legacy-opengl" and their consequential versions are available as **commits** (not tags!), as it's more clean for me to use these in the use...
 
 Possibly I will be developing also training tasks, such as algorithmic tasks to be completed, or simply a layer where training will be somewhat enforced by the application, and not freespirited in a sense that you 'develop what you develop'.
+
