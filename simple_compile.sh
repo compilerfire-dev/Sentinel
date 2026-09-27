@@ -1,3 +1,3 @@
 #!/bin/bash
 mkdir -p ./build/
-g++ main.cpp -lncurses -o ./build/Sentinel 
+g++ src/main.cpp src/sentinel/color.cpp src/sentinel/cmdargs.cpp src/sentinel/log.cpp  -Isrc/ -lncurses -o ./build/Sentinel 
